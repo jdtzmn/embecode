@@ -3,9 +3,12 @@
 import tempfile
 from pathlib import Path
 
+from unittest.mock import Mock
+
 from embecode.chunker import (
     Chunk,
     _count_non_whitespace,
+    _extract_definition_names,
     _get_context_info,
     _get_parser,
     _merge_nodes_into_chunk,
@@ -14,6 +17,39 @@ from embecode.chunker import (
     get_language_for_file,
 )
 from embecode.config import LanguageConfig
+
+
+def _make_node(
+    node_type: str,
+    name: str | None = None,
+    children: list | None = None,
+    fields: dict | None = None,
+) -> Mock:
+    """Create a mock tree-sitter Node for definition extraction tests.
+
+    Args:
+        node_type: The node's ``type`` attribute (e.g. ``"function_definition"``).
+        name: If given, ``child_by_field_name("name")`` returns a node whose
+            ``.text`` is this string encoded as UTF-8 bytes.
+        children: Child mock nodes.  Defaults to empty list.
+        fields: Extra field_name → Mock mappings for ``child_by_field_name``.
+    """
+    node = Mock()
+    node.type = node_type
+    node.children = children or []
+
+    extra_fields: dict[str, Mock | None] = fields or {}
+
+    if name is not None:
+        name_node = Mock()
+        name_node.text = name.encode("utf-8")
+        extra_fields.setdefault("name", name_node)
+
+    def _child_by_field_name(field: str) -> Mock | None:
+        return extra_fields.get(field)
+
+    node.child_by_field_name = _child_by_field_name
+    return node
 
 
 def test_get_language_for_file():
@@ -717,3 +753,18 @@ def test_merge_nodes_into_chunk_empty_list():
     """Test _merge_nodes_into_chunk with empty node list."""
     chunk = _merge_nodes_into_chunk([], b"source code", "/path/file.py", "python")
     assert chunk is None
+
+
+# ---------------------------------------------------------------------------
+# Definition extraction tests (using mock tree-sitter nodes)
+# ---------------------------------------------------------------------------
+
+
+class TestDefinitionExtraction:
+    """Tests for _extract_definition_names and related helpers."""
+
+    def test_extract_python_function_definition(self) -> None:
+        """Python `def foo():` produces definitions containing `function foo`."""
+        node = _make_node("function_definition", name="foo")
+        result = _extract_definition_names([node], "python")
+        assert result == ["function foo"]
