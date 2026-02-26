@@ -786,3 +786,121 @@ def test_database_context_without_explicit_context(temp_db):
     conn = temp_db._conn
     chunk = conn.execute("SELECT context FROM chunks").fetchone()
     assert chunk[0] == ""
+
+
+def test_metadata_table_created(temp_db):
+    """Test that metadata table is created during schema initialization."""
+    temp_db.connect()
+
+    conn = temp_db._conn
+    tables = conn.execute(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+    ).fetchall()
+    table_names = {row[0] for row in tables}
+
+    assert "metadata" in table_names
+
+
+def test_get_metadata_missing_key(temp_db):
+    """Test that get_metadata returns None for non-existent key."""
+    temp_db.connect()
+
+    result = temp_db.get_metadata("nonexistent")
+    assert result is None
+
+
+def test_set_and_get_metadata(temp_db):
+    """Test setting and retrieving metadata."""
+    temp_db.connect()
+
+    temp_db.set_metadata("key", "value")
+    result = temp_db.get_metadata("key")
+
+    assert result == "value"
+
+
+def test_set_metadata_upsert(temp_db):
+    """Test that set_metadata overwrites existing values."""
+    temp_db.connect()
+
+    temp_db.set_metadata("key", "a")
+    temp_db.set_metadata("key", "b")
+
+    result = temp_db.get_metadata("key")
+    assert result == "b"
+
+
+def test_clear_index_preserves_metadata(temp_db):
+    """Test that clear_index does NOT clear the metadata table."""
+    temp_db.connect()
+
+    # Set metadata
+    temp_db.set_metadata("embedding_model", "test-model")
+
+    # Insert some chunk data so clear_index has something to delete
+    chunk_records = [
+        {
+            "file_path": "test.py",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 5,
+            "content": "def hello(): pass",
+            "context": "test.py: hello",
+            "hash": "abc123",
+            "embedding": [0.1] * 384,
+        }
+    ]
+    temp_db.insert_chunks(chunk_records)
+
+    # Clear the index
+    temp_db.clear_index()
+
+    # Verify metadata survived
+    result = temp_db.get_metadata("embedding_model")
+    assert result == "test-model"
+
+    # Verify index data was actually cleared
+    stats = temp_db.get_index_stats()
+    assert stats["total_chunks"] == 0
+
+
+def test_get_indexed_file_paths(temp_db):
+    """Test getting all indexed file paths."""
+    temp_db.connect()
+
+    # Insert file metadata for 3 files
+    temp_db.update_file_metadata("src/main.py", 5)
+    temp_db.update_file_metadata("src/utils.py", 3)
+    temp_db.update_file_metadata("tests/test_main.py", 2)
+
+    paths = temp_db.get_indexed_file_paths()
+
+    assert paths == {"src/main.py", "src/utils.py", "tests/test_main.py"}
+
+
+def test_get_indexed_file_paths_empty(temp_db):
+    """Test getting indexed file paths from empty database."""
+    temp_db.connect()
+
+    paths = temp_db.get_indexed_file_paths()
+
+    assert paths == set()
+
+
+def test_get_indexed_files_with_timestamps(temp_db):
+    """Test getting indexed files with their last_indexed timestamps."""
+    temp_db.connect()
+
+    # Insert file metadata for 2 files
+    temp_db.update_file_metadata("src/main.py", 5)
+    temp_db.update_file_metadata("src/utils.py", 3)
+
+    result = temp_db.get_indexed_files_with_timestamps()
+
+    assert len(result) == 2
+    assert "src/main.py" in result
+    assert "src/utils.py" in result
+
+    # Verify values are datetime objects
+    assert isinstance(result["src/main.py"], datetime)
+    assert isinstance(result["src/utils.py"], datetime)

@@ -110,6 +110,14 @@ class Database:
             )
         """)
 
+        # Metadata table: stores key-value pairs (e.g., embedding model name)
+        self._conn.execute("""
+            CREATE TABLE IF NOT EXISTS metadata (
+                key VARCHAR PRIMARY KEY,
+                value VARCHAR NOT NULL
+            )
+        """)
+
         # Create indexes for common queries
         self._conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_chunks_file_path
@@ -572,6 +580,77 @@ class Database:
             }
             for row in results
         ]
+
+    def get_metadata(self, key: str) -> str | None:
+        """Read a value from the metadata table.
+
+        Args:
+            key: Metadata key to look up
+
+        Returns:
+            The value if found, None otherwise
+        """
+        self.connect()
+        if self._conn is None:
+            msg = "Database connection not open"
+            raise RuntimeError(msg)
+
+        result = self._conn.execute(
+            "SELECT value FROM metadata WHERE key = ?",
+            [key],
+        ).fetchone()
+
+        return result[0] if result else None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """Write (upsert) a value into the metadata table.
+
+        Args:
+            key: Metadata key
+            value: Metadata value
+        """
+        self.connect()
+        if self._conn is None:
+            msg = "Database connection not open"
+            raise RuntimeError(msg)
+
+        self._conn.execute(
+            """
+            INSERT INTO metadata (key, value)
+            VALUES (?, ?)
+            ON CONFLICT (key) DO UPDATE SET
+                value = excluded.value
+            """,
+            [key, value],
+        )
+
+    def get_indexed_file_paths(self) -> set[str]:
+        """Get all indexed file paths.
+
+        Returns:
+            Set of all file paths in the files table
+        """
+        self.connect()
+        if self._conn is None:
+            msg = "Database connection not open"
+            raise RuntimeError(msg)
+
+        result = self._conn.execute("SELECT path FROM files").fetchall()
+        return {row[0] for row in result}
+
+    def get_indexed_files_with_timestamps(self) -> dict[str, datetime]:
+        """Get all indexed files with their last_indexed timestamps.
+
+        Returns:
+            Dictionary mapping file paths to their last_indexed datetime (UTC)
+        """
+        self.connect()
+        if self._conn is None:
+            msg = "Database connection not open"
+            raise RuntimeError(msg)
+
+        result = self._conn.execute("SELECT path, last_indexed FROM files").fetchall()
+        return {row[0]: row[1] for row in result}
 
     def _fallback_keyword_search(
         self,
