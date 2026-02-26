@@ -218,7 +218,7 @@ class TestEmbeCodeServer:
             language="python",
             start_line=1,
             end_line=2,
-            context="",
+            definitions="function hello",
             score=0.95,
         )
         mock_searcher.search.return_value = [result]
@@ -232,8 +232,10 @@ class TestEmbeCodeServer:
 
         # Verify
         assert len(results) == 1
-        assert results[0]["content"] == "def hello():\n    print('hello')"
         assert results[0]["file_path"] == "main.py"
+        assert results[0]["definitions"] == "function hello"
+        assert results[0]["preview"] == "def hello():\n    print('hello')"
+        assert "content" not in results[0]
         mock_searcher.search.assert_called_once_with(
             "hello function", mode="semantic", top_k=5, path=None
         )
@@ -815,12 +817,12 @@ class TestMCPToolFunctions:
         mock_server = Mock()
         mock_server.search_code.return_value = [
             {
-                "content": "test",
                 "file_path": "test.py",
                 "language": "python",
                 "start_line": 1,
                 "end_line": 2,
-                "context": "",
+                "definitions": "",
+                "preview": "test",
                 "score": 0.9,
             }
         ]
@@ -831,7 +833,7 @@ class TestMCPToolFunctions:
 
         # Verify
         assert len(results) == 1
-        assert results[0]["content"] == "test"
+        assert results[0]["file_path"] == "test.py"
         mock_server.search_code.assert_called_once_with(
             "test query", mode="semantic", top_k=10, path=None
         )

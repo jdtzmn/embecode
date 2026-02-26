@@ -27,18 +27,26 @@ class ChunkResult:
     language: str
     start_line: int
     end_line: int
-    context: str
+    definitions: str
     score: float  # Relevance score (higher is better)
 
+    def preview(self) -> str:
+        """Generate a 2-line preview from chunk content."""
+        lines = [line for line in self.content.splitlines() if line.strip()]
+        preview = "\n".join(lines[:2])
+        if len(preview) > 200:
+            return preview[:197] + "..."
+        return preview
+
     def to_dict(self) -> dict:
-        """Convert result to dictionary for API responses."""
+        """Convert result to concise dictionary for API responses (no full content)."""
         return {
-            "content": self.content,
             "file_path": self.file_path,
             "language": self.language,
             "start_line": self.start_line,
             "end_line": self.end_line,
-            "context": self.context,
+            "definitions": self.definitions,
+            "preview": self.preview(),
             "score": self.score,
         }
 
@@ -144,7 +152,7 @@ class Searcher:
                 language=row["language"],
                 start_line=row["start_line"],
                 end_line=row["end_line"],
-                context=row["context"],
+                definitions=row.get("definitions", ""),
                 score=row["score"],
             )
             for row in results
@@ -181,7 +189,7 @@ class Searcher:
                 language=row["language"],
                 start_line=row["start_line"],
                 end_line=row["end_line"],
-                context=row["context"],
+                definitions=row.get("definitions", ""),
                 score=row["score"],
             )
             for row in results
@@ -245,7 +253,7 @@ class Searcher:
                 language=chunk_map[cid].language,
                 start_line=chunk_map[cid].start_line,
                 end_line=chunk_map[cid].end_line,
-                context=chunk_map[cid].context,
+                definitions=chunk_map[cid].definitions,
                 score=rrf_scores[cid],
             )
             for cid in top_ids

@@ -13,26 +13,28 @@ class TestChunkResult:
     """Test suite for ChunkResult."""
 
     def test_to_dict(self) -> None:
-        """Should convert result to dictionary."""
+        """Should convert result to concise dictionary without content or context."""
         result = ChunkResult(
-            content="def foo(): pass",
+            content="def foo(): pass\n    return 42",
             file_path="src/main.py",
             language="python",
             start_line=10,
             end_line=15,
-            context="module: main\ndefines: foo",
+            definitions="function foo",
             score=0.95,
         )
 
         result_dict = result.to_dict()
 
-        assert result_dict["content"] == "def foo(): pass"
         assert result_dict["file_path"] == "src/main.py"
         assert result_dict["language"] == "python"
         assert result_dict["start_line"] == 10
         assert result_dict["end_line"] == 15
-        assert result_dict["context"] == "module: main\ndefines: foo"
+        assert result_dict["definitions"] == "function foo"
+        assert result_dict["preview"] == "def foo(): pass\n    return 42"
         assert result_dict["score"] == 0.95
+        assert "content" not in result_dict
+        assert "context" not in result_dict
 
 
 class TestSearcher:
@@ -95,7 +97,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 10,
                 "end_line": 15,
-                "context": "module: auth\ndefines: authenticate",
+                "definitions": "function authenticate",
                 "score": 0.95,
             },
             {
@@ -104,7 +106,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 20,
                 "end_line": 25,
-                "context": "module: user\ndefines: login",
+                "definitions": "function login",
                 "score": 0.85,
             },
         ]
@@ -152,7 +154,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 5,
                 "end_line": 10,
-                "context": "module: auth\ndefines: UserAuthentication",
+                "definitions": "class UserAuthentication",
                 "score": 10.5,
             },
             {
@@ -161,7 +163,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 15,
                 "end_line": 20,
-                "context": "module: user\ndefines: authenticate_user",
+                "definitions": "function authenticate_user",
                 "score": 8.2,
             },
         ]
@@ -206,7 +208,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 10,
                 "end_line": 15,
-                "context": "module: auth",
+                "definitions": "",
                 "score": 0.95,
             },
             {
@@ -215,7 +217,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 20,
                 "end_line": 25,
-                "context": "module: login",
+                "definitions": "",
                 "score": 0.85,
             },
             {
@@ -224,7 +226,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 30,
                 "end_line": 35,
-                "context": "module: verify",
+                "definitions": "",
                 "score": 0.75,
             },
         ]
@@ -237,7 +239,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 20,
                 "end_line": 25,
-                "context": "module: login",
+                "definitions": "",
                 "score": 12.5,
             },
             {
@@ -246,7 +248,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 40,
                 "end_line": 45,
-                "context": "module: security",
+                "definitions": "",
                 "score": 10.2,
             },
             {
@@ -255,7 +257,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 10,
                 "end_line": 15,
-                "context": "module: auth",
+                "definitions": "",
                 "score": 8.5,
             },
         ]
@@ -327,7 +329,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 10,
                 "end_line": 15,
-                "context": "module: main",
+                "definitions": "",
                 "score": 0.9,
             },
         ]
@@ -367,7 +369,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 10,
                 "end_line": 15,
-                "context": "module: main",
+                "definitions": "",
                 "score": 0.9,
             },
             {
@@ -376,7 +378,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 20,
                 "end_line": 25,
-                "context": "module: utils",
+                "definitions": "",
                 "score": 0.8,
             },
         ]
@@ -407,7 +409,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 10,
                 "end_line": 15,
-                "context": "module: main\ndefines: foo",
+                "definitions": "function foo",
                 "score": 0.95,
             },
         ]
@@ -418,7 +420,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": 10,  # Same start line
                 "end_line": 15,
-                "context": "alternative context",  # Different context
+                "definitions": "function foo",  # Different definitions
                 "score": 12.5,
             },
         ]
@@ -428,7 +430,7 @@ class TestSearcher:
         # Should treat as duplicate and use semantic version (added first)
         assert len(results) == 1
         assert results[0].content == "def foo(): pass"  # From semantic
-        assert results[0].context == "module: main\ndefines: foo"  # From semantic
+        assert results[0].definitions == "function foo"  # From semantic
         # RRF score combines both: 1/(60+1) + 1/(60+1) = 2/61
         assert results[0].score == pytest.approx(2 / 61, abs=0.0001)
 
@@ -444,7 +446,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": i * 10,
                 "end_line": i * 10 + 5,
-                "context": f"module: file{i}",
+                "definitions": "",
                 "score": 1.0 - (i * 0.1),
             }
             for i in range(5)
@@ -456,7 +458,7 @@ class TestSearcher:
                 "language": "python",
                 "start_line": (i + 5) * 10,
                 "end_line": (i + 5) * 10 + 5,
-                "context": f"module: file{i + 5}",
+                "definitions": "",
                 "score": 10.0 - i,
             }
             for i in range(5)
@@ -517,7 +519,7 @@ class TestSearcher:
             language="python",
             start_line=42,
             end_line=100,
-            context="test context",
+            definitions="function test",
             score=0.123456,
         )
 
@@ -526,7 +528,7 @@ class TestSearcher:
         assert result.language == "python"
         assert result.start_line == 42
         assert result.end_line == 100
-        assert result.context == "test context"
+        assert result.definitions == "function test"
         assert result.score == 0.123456
 
     def test_search_exceptions_are_searcherror_subclass(self) -> None:
