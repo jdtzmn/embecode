@@ -756,6 +756,7 @@ class Indexer:
                     "content": chunk.content,
                     "context": chunk.context,
                     "hash": chunk.hash,
+                    "definitions": chunk.definitions,
                     "embedding": embedding,
                 }
             )
