@@ -36,6 +36,21 @@ class TestChunkResult:
         assert "content" not in result_dict
         assert "context" not in result_dict
 
+    def test_result_preview_skips_empty_lines(self) -> None:
+        """Preview should skip leading blank lines and show first 2 non-empty lines."""
+        result = ChunkResult(
+            content="\n\n\n    \ndef first_real_line(): pass\n\ndef second_real_line(): pass\n\ndef third_real_line(): pass",
+            file_path="src/main.py",
+            language="python",
+            start_line=1,
+            end_line=10,
+            definitions="",
+            score=0.5,
+        )
+
+        d = result.to_dict()
+        assert d["preview"] == "def first_real_line(): pass\ndef second_real_line(): pass"
+
 
 class TestSearcher:
     """Test suite for Searcher."""
