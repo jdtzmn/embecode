@@ -768,3 +768,9 @@ class TestDefinitionExtraction:
         node = _make_node("function_definition", name="foo")
         result = _extract_definition_names([node], "python")
         assert result == ["function foo"]
+
+    def test_extract_python_class_definition(self) -> None:
+        """Python `class Bar:` produces definitions containing `class Bar`."""
+        node = _make_node("class_definition", name="Bar")
+        result = _extract_definition_names([node], "python")
+        assert result == ["class Bar"]
