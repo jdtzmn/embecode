@@ -1,0 +1,10 @@
+model: opencode/claude-sonnet-4-5
+auto_commit: true
+data_dir: .iteratr
+log_level: info
+log_file: ""
+iterations: 0
+headless: false
+template: ""
+spec_dir: ""
+commit_data_dir: false
