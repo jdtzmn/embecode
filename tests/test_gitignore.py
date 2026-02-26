@@ -1849,8 +1849,44 @@ class TestGitignoreEdgeCases:
         mock_embedder: Mock,
     ) -> None:
         """Trailing spaces in patterns should be stripped unless escaped with backslash."""
-        # TODO: Implement test for trailing space handling
-        pass
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with trailing spaces on pattern
+            # Pattern "foo.txt  " (two trailing spaces) should match "foo.txt" (no spaces)
+            # Pattern "bar.txt\ " (escaped space) should match "bar.txt " (with one space)
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("foo.txt  \nbar.txt\\ \n")
+
+            # Create test files
+            (project_path / "foo.txt").write_text(
+                "foo content"
+            )  # Should be excluded (matches "foo.txt  ")
+            (project_path / "bar.txt ").write_text(
+                "bar with space"
+            )  # Should be excluded (matches "bar.txt\ ")
+            (project_path / "bar.txt").write_text(
+                "bar no space"
+            )  # Should NOT be excluded (doesn't match "bar.txt\ ")
+            (project_path / "main.py").write_text("print('hello')")  # Should NOT be excluded
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # foo.txt should be excluded (trailing spaces stripped from pattern)
+            # "bar.txt " (with space) should be excluded (escaped space preserved in pattern)
+            # bar.txt (no space) should NOT be excluded (doesn't match escaped space pattern)
+            # main.py should NOT be excluded
+            expected = [
+                Path("bar.txt"),  # NOT ignored (doesn't match "bar.txt\ ")
+                Path("main.py"),  # NOT ignored
+            ]
+
+            assert relative_files == expected
 
     def test_backslash_escapes_special_chars(
         self,
