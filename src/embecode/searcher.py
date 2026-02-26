@@ -207,7 +207,7 @@ class Searcher:
         query: str,
         top_k: int,
         path: str | None = None,
-    ) -> list[ChunkResult]:
+    ) -> SearchResponse:
         """
         Perform keyword search using BM25 (full-text search).
 
@@ -217,27 +217,37 @@ class Searcher:
             path: Optional path prefix filter.
 
         Returns:
-            List of ChunkResult objects ordered by BM25 score.
+            SearchResponse with results ordered by BM25 score and timings.
         """
-        # Query database using FTS (BM25)
+        timings = SearchTimings()
+        t0 = time.perf_counter()
+
+        # Phase: BM25 search
+        t = time.perf_counter()
         results = self.db.bm25_search(
             query=query,
             top_k=top_k,
             path_prefix=path,
         )
+        timings.bm25_search_ms = (time.perf_counter() - t) * 1000
 
-        return [
-            ChunkResult(
-                content=row["content"],
-                file_path=row["file_path"],
-                language=row["language"],
-                start_line=row["start_line"],
-                end_line=row["end_line"],
-                definitions=row.get("definitions", ""),
-                score=row["score"],
-            )
-            for row in results
-        ]
+        timings.total_ms = (time.perf_counter() - t0) * 1000
+
+        return SearchResponse(
+            results=[
+                ChunkResult(
+                    content=row["content"],
+                    file_path=row["file_path"],
+                    language=row["language"],
+                    start_line=row["start_line"],
+                    end_line=row["end_line"],
+                    definitions=row.get("definitions", ""),
+                    score=row["score"],
+                )
+                for row in results
+            ],
+            timings=timings,
+        )
 
     def _search_hybrid(
         self,
