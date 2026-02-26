@@ -1250,3 +1250,66 @@ class TestGitignoreNesting:
             ]
 
             assert relative_files == expected
+
+
+class TestGitignoreAndEmbeCodeConfig:
+    """Test suite for interaction between .gitignore and embecode config."""
+
+    @pytest.fixture
+    def mock_db(self) -> Mock:
+        """Create a mock database."""
+        db = Mock()
+        db.get_index_stats.return_value = {
+            "files_indexed": 0,
+            "total_chunks": 0,
+            "last_updated": None,
+        }
+        return db
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        """Create a mock embedder."""
+        return Mock()
+
+    def test_gitignore_checked_before_config_include(
+        self,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """File gitignored should be excluded even if config include=[] (include everything)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore that excludes *.log files
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("*.log\n")
+
+            # Create test files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "debug.log").write_text("log content")  # Should be excluded
+            (project_path / "data.json").write_text('{"key": "value"}')
+
+            # Create config with include=[] (index everything)
+            config = Mock(spec=EmbeCodeConfig)
+            config.index = IndexConfig(
+                include=[],  # Empty = index everything by default
+                exclude=["node_modules/", ".git/"],
+                languages=LanguageConfig(python=1500, default=1000),
+            )
+            config.embeddings = EmbeddingsConfig(model="test-model")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # debug.log should be excluded by gitignore even though include=[] would allow it
+            expected = [
+                Path("data.json"),
+                Path("main.py"),
+                # debug.log is excluded by .gitignore
+            ]
+
+            assert relative_files == expected
