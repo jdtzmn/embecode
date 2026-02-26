@@ -1810,8 +1810,37 @@ class TestGitignoreEdgeCases:
         mock_embedder: Mock,
     ) -> None:
         """Gitignore with Windows CRLF line endings should be parsed correctly."""
-        # TODO: Implement test for Windows line endings (\r\n)
-        pass
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with Windows-style CRLF line endings
+            # Pattern 1: *.log (exclude all .log files)
+            # Pattern 2: # comment line
+            # Pattern 3: *.tmp (exclude all .tmp files)
+            gitignore = project_path / ".gitignore"
+            gitignore.write_bytes(b"*.log\r\n# This is a comment\r\n*.tmp\r\n")
+
+            # Create test files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "debug.log").write_text("log data")  # Should be excluded
+            (project_path / "temp.tmp").write_text("temp data")  # Should be excluded
+            (project_path / "data.json").write_text('{"key": "value"}')
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Only .py and .json files should be collected
+            # .log and .tmp files should be excluded despite Windows line endings
+            expected = [
+                Path("data.json"),
+                Path("main.py"),
+            ]
+
+            assert relative_files == expected
 
     def test_trailing_space_stripped_unless_escaped(
         self,
