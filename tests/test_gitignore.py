@@ -397,3 +397,59 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_double_star_prefix_matches_any_depth(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with **/ prefix (e.g., **/logs) should match at any depth."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with **/ prefix pattern
+            (project_path / ".gitignore").write_text("**/logs\n")
+
+            # Create 'logs' directory at root level (should be ignored)
+            root_logs = project_path / "logs"
+            root_logs.mkdir()
+            (root_logs / "app.log").write_text("root level log")
+            (root_logs / "error.log").write_text("root level error")
+
+            # Create 'logs' directory in a subdirectory (should also be ignored)
+            sub = project_path / "sub"
+            sub.mkdir()
+            sub_logs = sub / "logs"
+            sub_logs.mkdir()
+            (sub_logs / "debug.log").write_text("sub level log")
+
+            # Create 'logs' directory deeply nested (should also be ignored)
+            a = project_path / "a"
+            a.mkdir()
+            b = a / "b"
+            b.mkdir()
+            ab_logs = b / "logs"
+            ab_logs.mkdir()
+            (ab_logs / "trace.log").write_text("deeply nested log")
+
+            # Create some non-logs files at various levels (should be indexed)
+            (project_path / "main.py").write_text("print('root')")
+            (sub / "module.py").write_text("print('sub')")
+            (b / "helper.py").write_text("print('nested')")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # All files in 'logs' directories at any depth should be excluded
+            expected = [
+                Path("a/b/helper.py"),
+                Path("main.py"),
+                Path("sub/module.py"),
+            ]
+
+            assert relative_files == expected
