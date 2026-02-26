@@ -2021,5 +2021,30 @@ class TestGitignoreEdgeCases:
         mock_embedder: Mock,
     ) -> None:
         """Project where all files are gitignored should return empty list without error."""
-        # TODO: Implement test for all-gitignored project
-        pass
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore that excludes all file types we'll create
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("*.py\n*.txt\n*.json\n*.md\n")
+
+            # Create various files - all should be excluded
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "data.json").write_text('{"key": "value"}')
+            (project_path / "readme.md").write_text("# Readme")
+            (project_path / "notes.txt").write_text("some notes")
+
+            # Create subdirectory with more files - also all excluded
+            sub = project_path / "sub"
+            sub.mkdir()
+            (sub / "utils.py").write_text("def helper(): pass")
+            (sub / "info.txt").write_text("information")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Should return empty list - all files are gitignored
+            assert files == [], (
+                f"Expected empty list when all files are gitignored, got {len(files)} files"
+            )
