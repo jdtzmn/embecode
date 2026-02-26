@@ -345,6 +345,17 @@ class Indexer:
             # Load .gitignore for current directory if present
             self._load_gitignore(root_path)
 
+            # Filter out gitignored directories to prevent recursion into them
+            # Modify dirs in-place to control os.walk behavior
+            dirs_to_remove = []
+            for dirname in dirs:
+                dir_path = root_path / dirname
+                if self._is_directory_gitignored(dir_path):
+                    dirs_to_remove.append(dirname)
+
+            for dirname in dirs_to_remove:
+                dirs.remove(dirname)
+
             # Process files in current directory
             for filename in filenames:
                 file_path = root_path / filename
@@ -412,6 +423,94 @@ class Indexer:
                 if pattern.match_file(rel_str):
                     # pattern.include=True means ignore (exclude from index)
                     # pattern.include=False means negation (include in index despite previous ignore)
+                    final_match = pattern.include
+
+        return final_match if final_match is not None else False
+
+    def _is_directory_gitignored(self, dir_path: Path) -> bool:
+        """
+        Check if a directory is ignored by any .gitignore files in its ancestor directories.
+
+        This is used to prevent recursion into excluded directories.
+
+        A directory should be excluded if:
+        1. The directory itself matches a pattern (with or without trailing slash)
+        2. A parent directory is excluded (and thus everything under it is excluded)
+
+        Args:
+            dir_path: Directory path to check.
+
+        Returns:
+            True if directory is gitignored.
+        """
+        try:
+            relative_path = dir_path.relative_to(self.project_path)
+        except ValueError:
+            # Directory is outside project path
+            return False
+
+        # Check if any parent directory is excluded
+        # If a parent is excluded, this directory is implicitly excluded too
+        current = self.project_path
+        for part in relative_path.parts[:-1]:  # All parts except the last one
+            current = current / part
+            if self._is_directory_explicitly_excluded(current):
+                return True
+
+        # Check if this directory itself is explicitly excluded
+        return self._is_directory_explicitly_excluded(dir_path)
+
+    def _is_directory_explicitly_excluded(self, dir_path: Path) -> bool:
+        """
+        Check if a specific directory is explicitly excluded by gitignore patterns.
+
+        This checks if the directory path itself matches a pattern, not its contents.
+
+        Args:
+            dir_path: Directory path to check.
+
+        Returns:
+            True if directory is explicitly excluded.
+        """
+        try:
+            relative_path = dir_path.relative_to(self.project_path)
+        except ValueError:
+            return False
+
+        # Collect all ancestor directories from project root to directory's parent
+        ancestor_dirs = []
+        current = self.project_path
+        for part in relative_path.parent.parts:
+            current = current / part
+            ancestor_dirs.append(current)
+
+        # Also check project root
+        all_dirs = [self.project_path] + ancestor_dirs
+
+        # Track the final match result across all .gitignore files
+        final_match: bool | None = None
+
+        # Process .gitignore files from root to directory's parent (lowest precedence to highest)
+        for directory in all_dirs:
+            spec = self._load_gitignore(directory)
+            if spec is None:
+                continue
+
+            # Get path relative to this .gitignore's directory
+            try:
+                rel_to_gitignore = dir_path.relative_to(directory)
+            except ValueError:
+                continue
+
+            rel_str_no_slash = str(rel_to_gitignore)
+            rel_str_with_slash = rel_str_no_slash + "/"
+
+            # Check each pattern in order to find the last match
+            for pattern in spec.patterns:
+                # Check both with and without trailing slash
+                # Patterns like "build/" specifically match directories
+                # Patterns like "build" can also match directories
+                if pattern.match_file(rel_str_with_slash) or pattern.match_file(rel_str_no_slash):
                     final_match = pattern.include
 
         return final_match if final_match is not None else False

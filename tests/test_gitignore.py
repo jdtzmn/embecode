@@ -576,11 +576,16 @@ class TestGitignorePatternAnchoring:
         mock_db: Mock,
         mock_embedder: Mock,
     ) -> None:
-        """Pattern with single * (e.g., foo/*) should match anything except / (does not cross directory boundaries)."""
+        """Pattern with single * (e.g., foo/*) matches direct children including subdirectories.
+
+        The * wildcard doesn't match / within a filename, but foo/* matches foo/sub/ (a subdirectory).
+        Once foo/sub/ is matched, everything under it is also excluded.
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = Path(tmpdir)
 
-            # Create .gitignore with single * pattern that should NOT match across directories
+            # Create .gitignore with single * pattern
+            # This matches all direct children of foo/, including files and subdirectories
             (project_path / ".gitignore").write_text("foo/*\n")
 
             # Create foo/ directory with files directly inside (should be ignored)
@@ -589,16 +594,20 @@ class TestGitignorePatternAnchoring:
             (foo_dir / "bar.txt").write_text("direct child")  # Should be ignored
             (foo_dir / "baz.py").write_text("direct child")  # Should be ignored
 
-            # Create foo/ subdirectory with files (should NOT be ignored - * doesn't cross /)
+            # Create foo/ subdirectory - foo/* matches foo/sub/, so everything under it is ignored
             foo_sub = foo_dir / "sub"
             foo_sub.mkdir()
-            (foo_sub / "deep.txt").write_text("nested file")  # Should NOT be ignored
-            (foo_sub / "nested.py").write_text("nested file")  # Should NOT be ignored
+            (foo_sub / "deep.txt").write_text(
+                "nested file"
+            )  # Should be ignored (parent dir matched)
+            (foo_sub / "nested.py").write_text(
+                "nested file"
+            )  # Should be ignored (parent dir matched)
 
-            # Create another level deeper (should also NOT be ignored)
+            # Create another level deeper (also ignored because foo/sub/ is matched)
             foo_sub_deep = foo_sub / "deeper"
             foo_sub_deep.mkdir()
-            (foo_sub_deep / "very_deep.txt").write_text("very nested")  # Should NOT be ignored
+            (foo_sub_deep / "very_deep.txt").write_text("very nested")  # Should be ignored
 
             # Create some other files at root (should be indexed)
             (project_path / "main.py").write_text("print('main')")
@@ -611,12 +620,9 @@ class TestGitignorePatternAnchoring:
             # Convert to relative paths for easier assertion
             relative_files = sorted([f.relative_to(project_path) for f in files])
 
-            # Pattern foo/* should match foo/bar.txt and foo/baz.py
-            # but NOT foo/sub/deep.txt or foo/sub/nested.py (because * doesn't cross /)
+            # Pattern foo/* matches all direct children of foo/, including the sub/ directory
+            # Once sub/ is matched, git doesn't recurse into it, so all files under foo/ are excluded
             expected = [
-                Path("foo/sub/deep.txt"),  # NOT ignored (nested)
-                Path("foo/sub/deeper/very_deep.txt"),  # NOT ignored (deeply nested)
-                Path("foo/sub/nested.py"),  # NOT ignored (nested)
                 Path("main.py"),  # NOT ignored
                 Path("readme.md"),  # NOT ignored
             ]
@@ -874,6 +880,54 @@ class TestGitignoreNegation:
                 Path("root.py"),  # NOT ignored
                 Path("sub/keep.log"),  # Re-included by sub/.gitignore !keep.log
                 Path("sub/module.py"),  # NOT ignored
+            ]
+
+            assert relative_files == expected
+
+    def test_negation_cannot_re_include_inside_excluded_dir(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Negation patterns cannot re-include files inside an excluded directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create root .gitignore that excludes the entire build/ directory
+            root_gitignore = project_path / ".gitignore"
+            root_gitignore.write_text("build/\n")
+
+            # Create build directory
+            build = project_path / "build"
+            build.mkdir()
+
+            # Create .gitignore inside build directory trying to re-include important.txt
+            # This should NOT work because the parent directory is excluded
+            build_gitignore = build / ".gitignore"
+            build_gitignore.write_text("!important.txt\n")
+
+            # Create files inside build directory
+            (build / "important.txt").write_text("trying to re-include this")
+            (build / "output.js").write_text("console.log('build');")
+            (build / "bundle.js").write_text("console.log('bundle');")
+
+            # Create files outside build directory that should be indexed
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "readme.md").write_text("# Readme")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # All files in build/ should be excluded, even with negation pattern
+            # The build/ directory pattern excludes the directory itself, so git doesn't recurse into it
+            expected = [
+                Path("main.py"),  # NOT ignored
+                Path("readme.md"),  # NOT ignored
             ]
 
             assert relative_files == expected
