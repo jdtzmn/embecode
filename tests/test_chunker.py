@@ -827,3 +827,11 @@ class TestDefinitionExtraction:
         expr_node = _make_node("expression_statement")
         result = _extract_definition_names([import_node, expr_node], "python")
         assert result == []
+
+    def test_extract_unsupported_language(self) -> None:
+        """Unsupported language (toml/json) produces empty list."""
+        node = _make_node("pair", name="key")
+        result_toml = _extract_definition_names([node], "toml")
+        assert result_toml == []
+        result_json = _extract_definition_names([node], "json")
+        assert result_json == []
