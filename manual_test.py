@@ -11,10 +11,9 @@ This script tests:
 - Watcher with debounce
 """
 
+import sys
 import tempfile
 from pathlib import Path
-import sys
-from typing import Any
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
@@ -32,7 +31,7 @@ def test_config() -> bool:
     print_section("Testing Config Loading")
 
     try:
-        from embecode.config import load_config, EmbeCodeConfig, get_chunk_size_for_language
+        from embecode.config import get_chunk_size_for_language, load_config
 
         # Test 1: Default config
         print("✓ Test 1: Load default config")
@@ -41,7 +40,7 @@ def test_config() -> bool:
         assert config.embeddings.model == "nomic-embed-text-v1.5"
         assert config.search.default_mode == "hybrid"
         assert config.daemon.debounce_ms == 500
-        print(f"  Default config loaded successfully")
+        print("  Default config loaded successfully")
         print(f"  Model: {config.embeddings.model}")
         print(f"  Include: {config.index.include}")
 
@@ -78,7 +77,7 @@ def test_chunker() -> bool:
     print_section("Testing Chunker")
 
     try:
-        from embecode.chunker import chunk_file, get_language_for_file, Chunk
+        from embecode.chunker import Chunk, chunk_file, get_language_for_file
         from embecode.config import LanguageConfig
 
         # Create temp files
@@ -94,7 +93,7 @@ def hello():
 
 def world():
     print("world")
-    
+
 class Foo:
     def bar(self):
         return 42
@@ -163,15 +162,15 @@ def test_embedder() -> bool:
     print_section("Testing Embedder")
 
     try:
-        from embecode.embedder import Embedder
         from embecode.config import EmbeddingsConfig
+        from embecode.embedder import Embedder
 
         # Test 1: Local model initialization (lazy loading)
         print("✓ Test 1: Local model initialization")
         config = EmbeddingsConfig(model="all-MiniLM-L6-v2")  # Faster small model
         embedder = Embedder(config)
         assert embedder._model is None  # Not loaded yet
-        print(f"  Embedder created (model not loaded yet)")
+        print("  Embedder created (model not loaded yet)")
 
         # Test 2: Embed single text (triggers lazy load)
         print("\n✓ Test 2: Embed text (triggers model load)")
@@ -181,7 +180,7 @@ def test_embedder() -> bool:
         assert len(embeddings[0]) > 0  # Has embedding dimension
         assert embedder._model is not None  # Now loaded
         print(f"  Embedding dimension: {len(embeddings[0])}")
-        print(f"  Model loaded successfully")
+        print("  Model loaded successfully")
 
         # Test 3: Embed multiple texts
         print("\n✓ Test 3: Embed multiple texts")
@@ -220,7 +219,7 @@ def test_searcher() -> bool:
     print_section("Testing Searcher")
 
     try:
-        from embecode.searcher import Searcher, ChunkResult, IndexNotReadyError
+        from embecode.searcher import ChunkResult, Searcher
 
         # Mock database and embedder
         class MockDB:
@@ -336,8 +335,8 @@ def test_watcher() -> bool:
     print_section("Testing Watcher")
 
     try:
-        from embecode.watcher import Watcher
         from embecode.config import EmbeCodeConfig
+        from embecode.watcher import Watcher
 
         # Mock indexer
         class MockIndexer:
@@ -386,8 +385,8 @@ def test_watcher() -> bool:
             node_modules.parent.mkdir(parents=True)
             node_modules.write_text("// test")
 
-            assert watcher._should_process_file(src_file) == True
-            assert watcher._should_process_file(node_modules) == False
+            assert watcher._should_process_file(src_file)
+            assert not watcher._should_process_file(node_modules)
             print("  Include/exclude rules working correctly")
 
             # Test 4: Start and stop (briefly)

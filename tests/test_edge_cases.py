@@ -181,7 +181,7 @@ class TestConfigEdgeCases:
         config_file = tmp_path / ".embecode.toml"
         config_file.write_text("[index\ninvalid = ")
 
-        with pytest.raises(Exception):  # TOML parsing error
+        with pytest.raises((ValueError, Exception)):  # TOML parsing error
             load_config(tmp_path)
 
     def test_nonexistent_config_file(self, tmp_path: Path) -> None:

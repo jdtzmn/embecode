@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -286,7 +285,7 @@ def test_watcher_ignores_excluded_files_in_changes(test_project_path, test_confi
     changes = watcher._pending_changes.copy()
     watcher._pending_changes.clear()
 
-    for file_path, change_type in changes.items():
+    for file_path, _change_type in changes.items():
         watcher.indexer.update_file(file_path)
 
     # Verify indexer was not called
