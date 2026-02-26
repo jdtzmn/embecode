@@ -14,6 +14,7 @@ import os
 import random
 import string
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -553,31 +554,78 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
     # Skip test if psutil is not available
     pytest.importorskip("psutil")
 
-    # TODO: Implement test body
-    # - Generate synthetic codebase
-    # - Set up Database, Indexer, and config
-    # - Capture baseline memory
-    # - Start background peak memory monitoring (storing MemorySample objects)
-    # - Run full index (with timing)
-    # - Stop peak monitoring and capture final memory
-    # - Use find_peak_memory_sample() to extract peak and file index
+    # Step 1: Generate synthetic codebase
+    codebase_path = tmp_path / "codebase"
+    codebase_path.mkdir()
+    generate_synthetic_codebase(codebase_path)
+    files_generated = 2000  # As specified: 1200 Python + 400 TypeScript + 400 JavaScript
 
-    # Placeholder values for diagnostic output (will be replaced with real values)
-    files_generated = 0
-    files_indexed = 0
-    chunks_stored = 0
-    baseline_mb = 0.0
-    peak_mb = 0.0
-    final_mb = 0.0
-    peak_at_file_index: int | None = None
+    # Step 2: Set up Database, Indexer, and config
+    db_path = tmp_path / "test.duckdb"
+    db = Database(db_path)
+    db.connect()
 
-    # Track wall-clock duration of indexing
+    # Load config with include=[] and exclude defaults
+    config = load_config(project_path=codebase_path)
+
+    # Create mock embedder (returns zero vectors without loading a model)
+    embedder = MockEmbedder(dimension=768)
+
+    # Create indexer
+    indexer = Indexer(project_path=codebase_path, config=config, db=db, embedder=embedder)
+
+    # Step 3: Capture baseline memory (before indexing starts)
+    baseline_mb = get_memory_usage_mb()
+
+    # Step 4: Start background peak memory monitoring
+    peak_samples: list[MemorySample] = []
+    monitoring_active = threading.Event()
+    monitoring_active.set()
+
+    def monitor_peak_memory() -> None:
+        """Background thread to monitor peak memory every 2 seconds."""
+        while monitoring_active.is_set():
+            current_mb = get_memory_usage_mb()
+            timestamp = time.time()
+            # Try to get current file index from indexer status
+            try:
+                status = indexer.get_status()
+                # We don't have exact file index, but we can use files_indexed as proxy
+                file_index = status.files_indexed if status.files_indexed > 0 else None
+            except Exception:
+                file_index = None
+            peak_samples.append(MemorySample(timestamp, current_mb, file_index))
+            time.sleep(2.0)
+
+    monitor_thread = threading.Thread(target=monitor_peak_memory, daemon=True)
+    monitor_thread.start()
+
+    # Step 5: Run full index with timing (foreground mode for deterministic completion)
     start_time = time.perf_counter()
-    # TODO: Call indexer.start_full_index() here
+    indexer.start_full_index(background=False)
     end_time = time.perf_counter()
     duration_sec = end_time - start_time
 
-    # Print diagnostics (always printed regardless of pass/fail)
+    # Step 6: Stop peak monitoring and capture final memory
+    monitoring_active.clear()
+    monitor_thread.join(timeout=5.0)  # Wait for monitoring thread to finish
+    final_mb = get_memory_usage_mb()
+
+    # Step 7: Extract peak memory and file index
+    peak_mb, peak_at_file_index = find_peak_memory_sample(peak_samples)
+    # Peak might also be the final value if it occurred after last poll
+    if final_mb > peak_mb:
+        peak_mb = final_mb
+        # Peak was at the end, use final file count
+        status = indexer.get_status()
+        peak_at_file_index = status.files_indexed
+
+    # Get final statistics from database and indexer
+    status = indexer.get_status()
+    files_indexed = status.files_indexed
+    chunks_stored = status.total_chunks
+
+    # Step 8: Print diagnostics (always printed regardless of pass/fail)
     print_diagnostics(
         files_generated=files_generated,
         files_indexed=files_indexed,
@@ -589,8 +637,10 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
         peak_at_file_index=peak_at_file_index,
     )
 
-    # TODO: Assert memory constraints
-    # - Assert peak_mb < 2000.0 (2 GB)
-    # - Assert final_mb < 2000.0 (2 GB)
+    # Step 9: Clean up database connection
+    db.close()
 
-    assert False, "Test not yet implemented"
+    # Step 10: Assert memory constraints
+    # Both peak and final memory must stay below 2.0 GB (2000 MB)
+    assert peak_mb < 2000.0, f"Peak memory {peak_mb:.2f} MB exceeded 2000 MB limit"
+    assert final_mb < 2000.0, f"Final memory {final_mb:.2f} MB exceeded 2000 MB limit"
