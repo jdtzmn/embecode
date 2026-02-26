@@ -71,6 +71,21 @@ class TestChunkResult:
         assert preview.endswith("...")
         assert preview == "x" * 197 + "..."
 
+    def test_result_preview_single_line_chunk(self) -> None:
+        """Preview of a single non-empty line chunk should be that single line."""
+        result = ChunkResult(
+            content="import os\n",
+            file_path="src/main.py",
+            language="python",
+            start_line=1,
+            end_line=1,
+            definitions="",
+            score=0.5,
+        )
+
+        d = result.to_dict()
+        assert d["preview"] == "import os"
+
 
 class TestSearcher:
     """Test suite for Searcher."""
