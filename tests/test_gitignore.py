@@ -1049,3 +1049,71 @@ class TestGitignoreNesting:
             ]
 
             assert relative_files == expected
+
+    def test_child_gitignore_scoped_to_its_directory(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Child .gitignore rules should only apply to its directory and subdirectories, not parent directories."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create root directory with files
+            (project_path / "root.py").write_text("print('root')")
+            (project_path / "file.log").write_text(
+                "root log"
+            )  # Should be included (no .gitignore rules apply here)
+
+            # Create subdirectory with .gitignore that excludes *.log
+            sub = project_path / "sub"
+            sub.mkdir()
+            sub_gitignore = sub / ".gitignore"
+            sub_gitignore.write_text("*.log\n")
+
+            # Create files in subdirectory
+            (sub / "module.py").write_text("print('sub')")
+            (sub / "file.log").write_text("sub log")  # Should be excluded (matches sub/.gitignore)
+            (sub / "debug.log").write_text(
+                "debug log"
+            )  # Should be excluded (matches sub/.gitignore)
+
+            # Create another nested level under sub
+            nested = sub / "nested"
+            nested.mkdir()
+            (nested / "helper.py").write_text("print('nested')")
+            (nested / "nested.log").write_text(
+                "nested log"
+            )  # Should be excluded (parent sub/.gitignore applies)
+
+            # Create another sibling directory (rules from sub/.gitignore should NOT apply here)
+            other = project_path / "other"
+            other.mkdir()
+            (other / "module.py").write_text("print('other')")
+            (other / "other.log").write_text(
+                "other log"
+            )  # Should be included (sub/.gitignore doesn't apply here)
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # sub/.gitignore *.log pattern should only exclude .log files in sub/ and sub/nested/
+            # It should NOT exclude file.log in root or other.log in other/
+            expected = [
+                Path("file.log"),  # NOT ignored (sub/.gitignore doesn't apply to root)
+                Path("other/module.py"),  # NOT ignored
+                Path("other/other.log"),  # NOT ignored (sub/.gitignore doesn't apply to other/)
+                Path("root.py"),  # NOT ignored
+                Path("sub/module.py"),  # NOT ignored
+                Path("sub/nested/helper.py"),  # NOT ignored
+                # sub/file.log is excluded by sub/.gitignore
+                # sub/debug.log is excluded by sub/.gitignore
+                # sub/nested/nested.log is excluded by sub/.gitignore (parent rule applies)
+            ]
+
+            assert relative_files == expected
