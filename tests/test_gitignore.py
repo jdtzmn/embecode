@@ -1192,3 +1192,61 @@ class TestGitignoreNesting:
             ]
 
             assert relative_files == expected
+
+    def test_multiple_gitignore_files_independent_scopes(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Rules from sibling directories' .gitignore files should not affect each other."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create two sibling directories, each with their own .gitignore
+            dir_a = project_path / "dir_a"
+            dir_a.mkdir()
+            dir_a_gitignore = dir_a / ".gitignore"
+            dir_a_gitignore.write_text("*.log\n")  # Exclude .log files in dir_a
+
+            dir_b = project_path / "dir_b"
+            dir_b.mkdir()
+            dir_b_gitignore = dir_b / ".gitignore"
+            dir_b_gitignore.write_text("*.tmp\n")  # Exclude .tmp files in dir_b
+
+            # Create files in dir_a
+            (dir_a / "module.py").write_text("print('a')")
+            (dir_a / "debug.log").write_text("log")  # Excluded by dir_a/.gitignore
+            (dir_a / "cache.tmp").write_text("temp")  # NOT excluded (dir_b rule doesn't apply)
+
+            # Create files in dir_b
+            (dir_b / "module.py").write_text("print('b')")
+            (dir_b / "debug.log").write_text("log")  # NOT excluded (dir_a rule doesn't apply)
+            (dir_b / "cache.tmp").write_text("temp")  # Excluded by dir_b/.gitignore
+
+            # Create files in root (not affected by either child .gitignore)
+            (project_path / "main.py").write_text("print('main')")
+            (project_path / "root.log").write_text("root log")  # NOT excluded
+            (project_path / "root.tmp").write_text("root temp")  # NOT excluded
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Verify that each .gitignore only affects its own directory
+            expected = [
+                Path("dir_a/cache.tmp"),  # NOT ignored (dir_b rule doesn't apply here)
+                Path("dir_a/module.py"),  # NOT ignored
+                Path("dir_b/debug.log"),  # NOT ignored (dir_a rule doesn't apply here)
+                Path("dir_b/module.py"),  # NOT ignored
+                Path("main.py"),  # NOT ignored
+                Path("root.log"),  # NOT ignored (child rules don't apply to root)
+                Path("root.tmp"),  # NOT ignored (child rules don't apply to root)
+                # dir_a/debug.log is excluded by dir_a/.gitignore
+                # dir_b/cache.tmp is excluded by dir_b/.gitignore
+            ]
+
+            assert relative_files == expected
