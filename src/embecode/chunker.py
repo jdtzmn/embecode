@@ -96,6 +96,155 @@ def get_language_for_file(file_path: Path) -> str | None:
     return LANGUAGE_MAP.get(suffix)
 
 
+# Maps (language, node_type) -> label for definition extraction.
+# Only languages and node types listed here produce definitions.
+DEFINITION_NODE_TYPES: dict[str, dict[str, str]] = {
+    "python": {
+        "function_definition": "function",
+        "class_definition": "class",
+        "decorated_definition": "__decorated__",  # sentinel: unwrap to inner def/class
+    },
+    "typescript": {
+        "function_declaration": "function",
+        "class_declaration": "class",
+        "interface_declaration": "interface",
+        "type_alias_declaration": "type",
+        "enum_declaration": "enum",
+        "method_definition": "method",
+    },
+    "tsx": {
+        "function_declaration": "function",
+        "class_declaration": "class",
+        "interface_declaration": "interface",
+        "type_alias_declaration": "type",
+        "enum_declaration": "enum",
+        "method_definition": "method",
+    },
+    "javascript": {
+        "function_declaration": "function",
+        "class_declaration": "class",
+        "method_definition": "method",
+    },
+    "go": {
+        "function_declaration": "function",
+        "method_declaration": "method",
+        "type_declaration": "__go_type__",  # sentinel: name is on type_spec child
+    },
+    "rust": {
+        "function_item": "function",
+        "struct_item": "struct",
+        "enum_item": "enum",
+        "impl_item": "__rust_impl__",  # sentinel: name is in type field
+        "trait_item": "trait",
+    },
+    "java": {
+        "class_declaration": "class",
+        "interface_declaration": "interface",
+        "method_declaration": "method",
+        "enum_declaration": "enum",
+    },
+}
+
+
+def _extract_definition_names(nodes: list[Node], language: str) -> list[str]:
+    """Extract named definitions from AST nodes.
+
+    Walks the list of nodes being merged into a chunk and returns a list of
+    definition strings like ``["function foo", "class Bar"]``.
+    """
+    lang_table = DEFINITION_NODE_TYPES.get(language)
+    if not lang_table:
+        return []
+
+    definitions: list[str] = []
+
+    for node in nodes:
+        _collect_definitions(node, lang_table, language, definitions)
+
+    return definitions
+
+
+def _collect_definitions(
+    node: Node,
+    lang_table: dict[str, str],
+    language: str,
+    definitions: list[str],
+) -> None:
+    """Recursively collect definition names from a node and its children."""
+    label = lang_table.get(node.type)
+
+    if label is not None:
+        name = _extract_def_name(node, label, language)
+        if name:
+            definitions.append(name)
+        # Don't recurse into matched nodes — their children are part of
+        # the same definition (avoids double-counting inner methods that
+        # are already captured when the class node is recursed into at
+        # chunk level).
+        return
+
+    # Recurse into children to find nested definitions (e.g. methods inside
+    # a class body that was split during chunking).
+    for child in node.children:
+        _collect_definitions(child, lang_table, language, definitions)
+
+
+def _extract_def_name(node: Node, label: str, language: str) -> str | None:
+    """Extract a formatted definition name from a single AST node.
+
+    Returns e.g. ``"function foo"`` or ``None`` if the name can't be
+    determined.
+    """
+    # Python decorated_definition: unwrap to inner function/class
+    if label == "__decorated__":
+        return _extract_decorated_definition(node, language)
+
+    # Go type_declaration: name is on the type_spec child
+    if label == "__go_type__":
+        return _extract_go_type_declaration(node)
+
+    # Rust impl_item: name is in the "type" field
+    if label == "__rust_impl__":
+        return _extract_rust_impl(node)
+
+    # General case: name is in the "name" field
+    name_node = node.child_by_field_name("name")
+    if name_node and name_node.text is not None:
+        return f"{label} {name_node.text.decode('utf-8')}"
+
+    return None
+
+
+def _extract_decorated_definition(node: Node, language: str) -> str | None:
+    """Handle Python ``decorated_definition`` by unwrapping to inner def/class."""
+    lang_table = DEFINITION_NODE_TYPES.get(language, {})
+    for child in node.children:
+        inner_label = lang_table.get(child.type)
+        if inner_label and inner_label != "__decorated__":
+            name_node = child.child_by_field_name("name")
+            if name_node and name_node.text is not None:
+                return f"{inner_label} {name_node.text.decode('utf-8')}"
+    return None
+
+
+def _extract_go_type_declaration(node: Node) -> str | None:
+    """Handle Go ``type_declaration`` — name is on the ``type_spec`` child."""
+    for child in node.children:
+        if child.type == "type_spec":
+            name_node = child.child_by_field_name("name")
+            if name_node and name_node.text is not None:
+                return f"type {name_node.text.decode('utf-8')}"
+    return None
+
+
+def _extract_rust_impl(node: Node) -> str | None:
+    """Handle Rust ``impl_item`` — name is in the ``type`` field."""
+    type_node = node.child_by_field_name("type")
+    if type_node and type_node.text is not None:
+        return f"impl {type_node.text.decode('utf-8')}"
+    return None
+
+
 def _count_non_whitespace(text: str) -> int:
     """Count non-whitespace characters in text."""
     return sum(1 for c in text if not c.isspace())
