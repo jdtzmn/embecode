@@ -254,7 +254,7 @@ class Searcher:
         query: str,
         top_k: int,
         path: str | None = None,
-    ) -> list[ChunkResult]:
+    ) -> SearchResponse:
         """
         Perform hybrid search using RRF fusion of semantic and keyword results.
 
@@ -264,14 +264,24 @@ class Searcher:
             path: Optional path prefix filter.
 
         Returns:
-            List of ChunkResult objects ordered by RRF score.
+            SearchResponse with results ordered by RRF score and timings.
         """
+        timings = SearchTimings()
+        t0 = time.perf_counter()
+
         # Get results from both search methods (fetch more to improve fusion quality)
         # Typical heuristic: fetch 2-3x top_k from each leg
         fetch_k = top_k * 3
 
-        semantic_results = self._search_semantic(query, fetch_k, path)
-        keyword_results = self._search_keyword(query, fetch_k, path)
+        sem_response = self._search_semantic(query, fetch_k, path)
+        timings.embedding_ms = sem_response.timings.embedding_ms
+        timings.vector_search_ms = sem_response.timings.vector_search_ms
+
+        kw_response = self._search_keyword(query, fetch_k, path)
+        timings.bm25_search_ms = kw_response.timings.bm25_search_ms
+
+        # Phase: RRF fusion
+        t = time.perf_counter()
 
         # Build unique ID for each chunk (file_path + start_line)
         def chunk_id(result: ChunkResult) -> str:
@@ -282,13 +292,13 @@ class Searcher:
         chunk_map: dict[str, ChunkResult] = {}
 
         # Add semantic results with RRF scoring
-        for rank, result in enumerate(semantic_results, start=1):
+        for rank, result in enumerate(sem_response.results, start=1):
             cid = chunk_id(result)
             rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (self.RRF_K + rank)
             chunk_map[cid] = result
 
         # Add keyword results with RRF scoring
-        for rank, result in enumerate(keyword_results, start=1):
+        for rank, result in enumerate(kw_response.results, start=1):
             cid = chunk_id(result)
             rrf_scores[cid] = rrf_scores.get(cid, 0.0) + 1.0 / (self.RRF_K + rank)
             # Only add to chunk_map if not already present (prefer semantic version)
@@ -300,7 +310,7 @@ class Searcher:
         top_ids = sorted_ids[:top_k]
 
         # Build final results with updated scores
-        return [
+        fused_results = [
             ChunkResult(
                 content=chunk_map[cid].content,
                 file_path=chunk_map[cid].file_path,
@@ -312,3 +322,8 @@ class Searcher:
             )
             for cid in top_ids
         ]
+
+        timings.fusion_ms = (time.perf_counter() - t) * 1000
+        timings.total_ms = (time.perf_counter() - t0) * 1000
+
+        return SearchResponse(results=fused_results, timings=timings)
