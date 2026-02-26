@@ -15,12 +15,13 @@
 
 [index]
 # Directories and files to include in the index (relative to project root)
-# Default: ["."] (index entire project)
-include = [
-    "src/",
-    "lib/",
-    "tests/",
-]
+# Default: [] (empty list means index everything, subject to exclude patterns and .gitignore)
+# If you specify patterns here, ONLY matching files will be indexed.
+# Examples:
+#   include = []              → index all files (recommended)
+#   include = ["src/"]        → index only src/ directory
+#   include = ["src/", "lib/"] → index src/ and lib/ only
+include = []
 
 # Patterns to exclude from indexing (glob patterns supported)
 # Default: Common build/dependency directories
