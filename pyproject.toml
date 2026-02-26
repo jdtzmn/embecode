@@ -83,6 +83,7 @@ addopts = "--cov=embecode --cov-report=term-missing --cov-report=xml"
 markers = [
   "slow: marks tests as slow (deselect with '-m \"not slow\"')",
   "integration: marks tests as integration tests",
+  "memory: marks tests that measure process memory (deselect with '-m \"not memory\"')",
 ]
 
 [tool.coverage.run]
