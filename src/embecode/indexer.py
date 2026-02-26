@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+import pathspec
 
 if TYPE_CHECKING:
     from embecode.chunker import Chunk
@@ -103,6 +106,8 @@ class Indexer:
         self._current_file: str | None = None
         self._progress: float | None = None
         self._lock = threading.Lock()
+        # Cache for .gitignore PathSpec objects keyed by directory path
+        self._gitignore_cache: dict[Path, pathspec.PathSpec | None] = {}
 
     @property
     def is_indexing(self) -> bool:
@@ -290,19 +295,61 @@ class Indexer:
         except Exception as e:
             logger.warning("Failed to delete file %s from index: %s", file_path, e)
 
+    def _load_gitignore(self, directory: Path) -> pathspec.PathSpec | None:
+        """
+        Load and parse a .gitignore file from the given directory.
+
+        Args:
+            directory: Directory to check for .gitignore file.
+
+        Returns:
+            PathSpec object if .gitignore exists and is parseable, None otherwise.
+        """
+        if directory in self._gitignore_cache:
+            return self._gitignore_cache[directory]
+
+        gitignore_path = directory / ".gitignore"
+        if not gitignore_path.exists() or not gitignore_path.is_file():
+            self._gitignore_cache[directory] = None
+            return None
+
+        try:
+            with open(gitignore_path, encoding="utf-8") as f:
+                patterns = f.read().splitlines()
+            spec = pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, patterns)
+            self._gitignore_cache[directory] = spec
+            return spec
+        except Exception as e:
+            logger.warning("Failed to parse .gitignore at %s: %s", gitignore_path, e)
+            self._gitignore_cache[directory] = None
+            return None
+
     def _collect_files(self) -> list[Path]:
         """
         Walk file tree and collect files matching include/exclude rules.
 
+        Uses depth-first traversal to discover and load .gitignore files lazily.
+
         Returns:
             List of file paths to index.
         """
-        project_path = self.project_path
+        # Clear gitignore cache at start of each collection
+        self._gitignore_cache.clear()
+
         files = []
 
-        for file_path in project_path.rglob("*"):
-            if file_path.is_file() and self._should_index_file(file_path):
-                files.append(file_path)
+        # Use os.walk for depth-first traversal with control over directory order
+        for root, dirs, filenames in os.walk(self.project_path):
+            root_path = Path(root)
+
+            # Load .gitignore for current directory if present
+            self._load_gitignore(root_path)
+
+            # Process files in current directory
+            for filename in filenames:
+                file_path = root_path / filename
+                if self._should_index_file(file_path):
+                    files.append(file_path)
 
         return files
 
