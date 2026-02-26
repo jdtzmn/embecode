@@ -673,3 +673,50 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_character_range_pattern(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with character range (e.g., [abc].py) should match files with one character in the range."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with character range pattern
+            (project_path / ".gitignore").write_text("[abc].py\n")
+
+            # Create files that should match (single char from range)
+            (project_path / "a.py").write_text("# file a")  # Should be ignored
+            (project_path / "b.py").write_text("# file b")  # Should be ignored
+            (project_path / "c.py").write_text("# file c")  # Should be ignored
+
+            # Create files that should NOT match
+            (project_path / "d.py").write_text("# file d")  # NOT ignored (not in range)
+            (project_path / "x.py").write_text("# file x")  # NOT ignored (not in range)
+            (project_path / "main.py").write_text("# main")  # NOT ignored (multiple chars)
+            (project_path / "ab.py").write_text("# ab")  # NOT ignored (two chars)
+
+            # Create other normal files
+            (project_path / "readme.md").write_text("# Readme")
+            (project_path / "config.json").write_text("{}")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Only [abc].py pattern (single char from range) should be excluded
+            expected = [
+                Path("ab.py"),  # NOT ignored (two chars)
+                Path("config.json"),  # NOT ignored
+                Path("d.py"),  # NOT ignored (not in range)
+                Path("main.py"),  # NOT ignored (multiple chars)
+                Path("readme.md"),  # NOT ignored
+                Path("x.py"),  # NOT ignored (not in range)
+            ]
+
+            assert relative_files == expected
