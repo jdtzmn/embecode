@@ -13,7 +13,7 @@ build/
 # uv / pip
 .venv/
 venv/
-*.lock
+# uv.lock is intentionally tracked — do not add *.lock here
 
 # Testing
 .coverage
