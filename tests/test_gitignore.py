@@ -827,3 +827,53 @@ class TestGitignoreNegation:
             ]
 
             assert relative_files == expected
+
+    def test_negation_in_child_overrides_parent_ignore(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Child .gitignore can use negation to re-include files excluded by parent."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create root .gitignore that excludes all .log files
+            root_gitignore = project_path / ".gitignore"
+            root_gitignore.write_text("*.log\n")
+
+            # Create subdirectory with its own .gitignore that re-includes keep.log
+            sub = project_path / "sub"
+            sub.mkdir()
+            sub_gitignore = sub / ".gitignore"
+            sub_gitignore.write_text("!keep.log\n")
+
+            # Create test files in root directory
+            (project_path / "root.py").write_text("print('root')")
+            (project_path / "other.log").write_text(
+                "root log"
+            )  # Should be excluded by root .gitignore
+
+            # Create test files in subdirectory
+            (sub / "keep.log").write_text(
+                "important log"
+            )  # Should be re-included by sub/.gitignore
+            (sub / "other.log").write_text("regular log")  # Should be excluded by root .gitignore
+            (sub / "module.py").write_text("print('sub')")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # sub/keep.log should be re-included by sub/.gitignore negation
+            # root/other.log and sub/other.log should be excluded
+            expected = [
+                Path("root.py"),  # NOT ignored
+                Path("sub/keep.log"),  # Re-included by sub/.gitignore !keep.log
+                Path("sub/module.py"),  # NOT ignored
+            ]
+
+            assert relative_files == expected
