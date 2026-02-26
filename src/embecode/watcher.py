@@ -117,6 +117,20 @@ class Watcher:
                     for change_type, path_str in changes:
                         file_path = Path(path_str)
 
+                        # Check if this is a .gitignore file change
+                        if file_path.name == ".gitignore" and change_type in (
+                            Change.added,
+                            Change.modified,
+                        ):
+                            logger.info(
+                                "Detected .gitignore change: %s - triggering full reindex",
+                                file_path.relative_to(self.project_path),
+                            )
+                            # Trigger full reindex immediately (gitignore rules have changed)
+                            self.indexer.start_full_index(background=False)
+                            # Skip adding to pending changes since we're doing a full reindex
+                            continue
+
                         # Skip files that don't match our include/exclude rules
                         if not self._should_process_file(file_path):
                             continue
