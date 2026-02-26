@@ -155,7 +155,7 @@ class Searcher:
         query: str,
         top_k: int,
         path: str | None = None,
-    ) -> list[ChunkResult]:
+    ) -> SearchResponse:
         """
         Perform semantic search using dense vector embeddings.
 
@@ -165,30 +165,42 @@ class Searcher:
             path: Optional path prefix filter.
 
         Returns:
-            List of ChunkResult objects ordered by cosine similarity.
+            SearchResponse with results ordered by cosine similarity and timings.
         """
-        # Generate query embedding
-        query_embedding = self.embedder.embed([query])[0]
+        timings = SearchTimings()
+        t0 = time.perf_counter()
 
-        # Query database for nearest neighbors
+        # Phase: embedding
+        t = time.perf_counter()
+        query_embedding = self.embedder.embed([query])[0]
+        timings.embedding_ms = (time.perf_counter() - t) * 1000
+
+        # Phase: vector search
+        t = time.perf_counter()
         results = self.db.vector_search(
             query_embedding=query_embedding,
             top_k=top_k,
             path_prefix=path,
         )
+        timings.vector_search_ms = (time.perf_counter() - t) * 1000
 
-        return [
-            ChunkResult(
-                content=row["content"],
-                file_path=row["file_path"],
-                language=row["language"],
-                start_line=row["start_line"],
-                end_line=row["end_line"],
-                definitions=row.get("definitions", ""),
-                score=row["score"],
-            )
-            for row in results
-        ]
+        timings.total_ms = (time.perf_counter() - t0) * 1000
+
+        return SearchResponse(
+            results=[
+                ChunkResult(
+                    content=row["content"],
+                    file_path=row["file_path"],
+                    language=row["language"],
+                    start_line=row["start_line"],
+                    end_line=row["end_line"],
+                    definitions=row.get("definitions", ""),
+                    score=row["score"],
+                )
+                for row in results
+            ],
+            timings=timings,
+        )
 
     def _search_keyword(
         self,
