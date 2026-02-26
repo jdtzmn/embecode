@@ -75,6 +75,14 @@ class SearchTimings:
         }
 
 
+@dataclass
+class SearchResponse:
+    """Search results with timing breakdown (internal use only)."""
+
+    results: list[ChunkResult]
+    timings: SearchTimings
+
+
 class Searcher:
     """
     Hybrid search engine combining BM25 (keyword) and dense vector (semantic) search.
