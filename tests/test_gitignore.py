@@ -720,3 +720,73 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+
+class TestGitignoreNegation:
+    """Test suite for .gitignore negation patterns (!)."""
+
+    @pytest.fixture
+    def mock_config(self) -> EmbeCodeConfig:
+        """Create a mock config with empty include (index everything)."""
+        config = Mock(spec=EmbeCodeConfig)
+        config.index = IndexConfig(
+            include=[],  # Empty = index everything
+            exclude=["node_modules/", ".git/"],
+            languages=LanguageConfig(python=1500, default=1000),
+        )
+        config.embeddings = EmbeddingsConfig(model="test-model")
+        return config
+
+    @pytest.fixture
+    def mock_db(self) -> Mock:
+        """Create a mock database."""
+        db = Mock()
+        db.get_index_stats.return_value = {
+            "files_indexed": 0,
+            "total_chunks": 0,
+            "last_updated": None,
+        }
+        return db
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        """Create a mock embedder."""
+        return Mock()
+
+    def test_negation_re_includes_within_same_file(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Negation pattern (!) should re-include previously excluded files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with pattern then negation
+            # Pattern: *.log (exclude all .log files)
+            # Negation: !important.log (re-include important.log)
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("*.log\n!important.log\n")
+
+            # Create test files
+            (project_path / "important.log").write_text("critical data")
+            (project_path / "other.log").write_text("regular log")
+            (project_path / "debug.log").write_text("debug info")
+            (project_path / "main.py").write_text("print('hello')")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # important.log should be re-included by negation
+            # other.log and debug.log should still be excluded
+            expected = [
+                Path("important.log"),  # Re-included by !important.log
+                Path("main.py"),  # NOT ignored
+            ]
+
+            assert relative_files == expected
