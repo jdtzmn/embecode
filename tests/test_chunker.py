@@ -814,3 +814,9 @@ class TestDefinitionExtraction:
         node = _make_node("interface_declaration", name="Bar")
         result = _extract_definition_names([node], "typescript")
         assert result == ["interface Bar"]
+
+    def test_extract_javascript_function(self) -> None:
+        """JavaScript `function init() {}` produces `function init`."""
+        node = _make_node("function_declaration", name="init")
+        result = _extract_definition_names([node], "javascript")
+        assert result == ["function init"]
