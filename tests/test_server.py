@@ -449,7 +449,7 @@ class TestEmbeCodeServer:
         server.search_code("test", path="src/")
 
         # Verify path was passed to searcher
-        mock_searcher.search.assert_called_once_with("test", mode="hybrid", top_k=5, path="src/")
+        mock_searcher.search.assert_called_once_with("test", mode="hybrid", top_k=10, path="src/")
 
 
 class TestCatchUpStartup:

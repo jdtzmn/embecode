@@ -343,7 +343,7 @@ class TestSearcher:
         assert results[0].score == pytest.approx(1 / 61, abs=0.0001)
 
     def test_search_default_parameters(self, searcher: Searcher, mock_db: Mock) -> None:
-        """Should use default parameters (mode=hybrid, top_k=5)."""
+        """Should use default parameters (mode=hybrid, top_k=10)."""
         mock_db.vector_search.return_value = []
         mock_db.bm25_search.return_value = []
 
@@ -353,9 +353,9 @@ class TestSearcher:
         mock_db.vector_search.assert_called_once()
         mock_db.bm25_search.assert_called_once()
 
-        # Verify default top_k=5 (but fetches 15 for hybrid)
-        assert mock_db.vector_search.call_args[1]["top_k"] == 15
-        assert mock_db.bm25_search.call_args[1]["top_k"] == 15
+        # Verify default top_k=10 (but fetches 30 for hybrid)
+        assert mock_db.vector_search.call_args[1]["top_k"] == 30
+        assert mock_db.bm25_search.call_args[1]["top_k"] == 30
 
     def test_search_hybrid_all_duplicates(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock

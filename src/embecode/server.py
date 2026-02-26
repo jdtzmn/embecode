@@ -127,7 +127,7 @@ class EmbeCodeServer:
         self,
         query: str,
         mode: str = "hybrid",
-        top_k: int = 5,
+        top_k: int = 10,
         path: str | None = None,
     ) -> list[dict[str, Any]]:
         """
@@ -140,8 +140,8 @@ class EmbeCodeServer:
             path: Optional path prefix filter (e.g., "src/", "apps/ui/").
 
         Returns:
-            List of chunk result dictionaries with content, file_path, language,
-            start_line, end_line, context, and score.
+            List of concise chunk result dictionaries with file_path, language,
+            start_line, end_line, definitions, preview, and score.
 
         Raises:
             IndexNotReadyError: If index is still being built.
@@ -216,7 +216,7 @@ def initialize_server(project_path: Path) -> EmbeCodeServer:
 def search_code(
     query: str,
     mode: str = "hybrid",
-    top_k: int = 5,
+    top_k: int = 10,
     path: str | None = None,
 ) -> list[dict[str, Any]]:
     """
@@ -226,12 +226,12 @@ def search_code(
         query: Search query string (natural language or code).
         mode: Search mode - "semantic" for vector search, "keyword" for BM25,
               or "hybrid" for RRF fusion of both (default).
-        top_k: Number of results to return (default: 5).
+        top_k: Number of results to return (default: 10).
         path: Optional path prefix filter (e.g., "src/", "apps/ui/").
 
     Returns:
-        List of chunk results with content, file_path, language, start_line,
-        end_line, context, and relevance score.
+        List of concise chunk results with file_path, language, start_line,
+        end_line, definitions, preview, and relevance score.
     """
     server = get_server()
     try:

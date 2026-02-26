@@ -76,7 +76,7 @@ class Searcher:
         self,
         query: str,
         mode: str = "hybrid",
-        top_k: int = 5,
+        top_k: int = 10,
         path: str | None = None,
     ) -> list[ChunkResult]:
         """
