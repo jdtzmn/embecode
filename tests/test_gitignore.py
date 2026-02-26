@@ -86,3 +86,45 @@ class TestGitignoreBasic:
             ]
 
             assert relative_files == expected
+
+    def test_empty_gitignore_has_no_effect(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Completely empty .gitignore file should have no effect on indexing."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create empty .gitignore file
+            (project_path / ".gitignore").write_text("")
+
+            # Create test files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "utils.py").write_text("def foo(): pass")
+            (project_path / "data.json").write_text('{"key": "value"}')
+
+            # Create subdirectory with files
+            subdir = project_path / "src"
+            subdir.mkdir()
+            (subdir / "module.py").write_text("class MyClass: pass")
+            (subdir / "helper.py").write_text("def helper(): return 42")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # All files should be collected (empty .gitignore has no effect)
+            expected = [
+                Path("data.json"),
+                Path("main.py"),
+                Path("src/helper.py"),
+                Path("src/module.py"),
+                Path("utils.py"),
+            ]
+
+            assert relative_files == expected
