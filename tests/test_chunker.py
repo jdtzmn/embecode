@@ -820,3 +820,10 @@ class TestDefinitionExtraction:
         node = _make_node("function_declaration", name="init")
         result = _extract_definition_names([node], "javascript")
         assert result == ["function init"]
+
+    def test_extract_no_definitions(self) -> None:
+        """Python with only imports/constants produces empty list."""
+        import_node = _make_node("import_statement")
+        expr_node = _make_node("expression_statement")
+        result = _extract_definition_names([import_node, expr_node], "python")
+        assert result == []
