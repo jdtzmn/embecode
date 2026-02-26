@@ -128,3 +128,44 @@ class TestGitignoreBasic:
             ]
 
             assert relative_files == expected
+
+    def test_no_git_directory_still_respects_gitignore(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Project with .gitignore but no .git directory should still respect gitignore rules."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore without creating .git directory
+            (project_path / ".gitignore").write_text("*.log\n*.tmp\n")
+
+            # Create test files - some that should be ignored, some that should not
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "debug.log").write_text("log content")  # Should be ignored
+            (project_path / "temp.tmp").write_text("temp data")  # Should be ignored
+            (project_path / "data.json").write_text('{"key": "value"}')
+
+            # Create subdirectory with files
+            subdir = project_path / "src"
+            subdir.mkdir()
+            (subdir / "module.py").write_text("class MyClass: pass")
+            (subdir / "output.log").write_text("output")  # Should be ignored
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Only non-ignored files should be collected
+            expected = [
+                Path("data.json"),
+                Path("main.py"),
+                Path("src/module.py"),
+            ]
+
+            assert relative_files == expected
