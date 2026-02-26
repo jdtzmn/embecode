@@ -123,8 +123,11 @@ def get_memory_usage_mb() -> float:
     Returns:
         Memory usage in MB
     """
-    # TODO: Implement using psutil
-    return 0.0
+    import psutil
+
+    process = psutil.Process(os.getpid())
+    # RSS (Resident Set Size) in bytes, convert to MB
+    return process.memory_info().rss / (1024 * 1024)
 
 
 # ============================================================================
