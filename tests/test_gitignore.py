@@ -251,3 +251,50 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_leading_slash_anchors_to_gitignore_dir(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with leading slash (e.g., /foo.txt) should only match at gitignore directory level."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with leading slash pattern
+            (project_path / ".gitignore").write_text("/foo.txt\n")
+
+            # Create foo.txt at root (should be ignored)
+            (project_path / "foo.txt").write_text("root foo")
+            (project_path / "bar.txt").write_text("root bar")
+
+            # Create subdirectory with another foo.txt (should NOT be ignored)
+            subdir = project_path / "sub"
+            subdir.mkdir()
+            (subdir / "foo.txt").write_text("sub foo")
+            (subdir / "baz.txt").write_text("sub baz")
+
+            # Create deeper nested directory with foo.txt (should NOT be ignored)
+            nested = subdir / "nested"
+            nested.mkdir()
+            (nested / "foo.txt").write_text("nested foo")
+            (nested / "other.txt").write_text("nested other")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Root foo.txt should be excluded, but foo.txt in subdirectories should be included
+            expected = [
+                Path("bar.txt"),
+                Path("sub/baz.txt"),
+                Path("sub/foo.txt"),  # NOT ignored (pattern is anchored to root)
+                Path("sub/nested/foo.txt"),  # NOT ignored
+                Path("sub/nested/other.txt"),
+            ]
+
+            assert relative_files == expected
