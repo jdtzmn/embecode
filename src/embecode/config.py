@@ -27,7 +27,7 @@ class LanguageConfig:
 class IndexConfig:
     """Index behavior configuration."""
 
-    include: list[str] = field(default_factory=lambda: ["src/", "lib/", "tests/"])
+    include: list[str] = field(default_factory=list)
     exclude: list[str] = field(
         default_factory=lambda: [
             "node_modules/",

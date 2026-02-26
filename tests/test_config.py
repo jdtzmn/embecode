@@ -18,14 +18,14 @@ def test_default_config():
     """Test that default config loads correctly."""
     config = load_config()
 
-    assert config.index.include == ["src/", "lib/", "tests/"]
+    assert config.index.include == []
     assert "node_modules/" in config.index.exclude
     assert config.index.languages.python == 1500
     assert config.index.languages.typescript == 1200
     assert config.index.languages.javascript == 1200
     assert config.index.languages.default == 1000
 
-    assert config.embeddings.model == "nomic-embed-text-v1.5"
+    assert config.embeddings.model == "nomic-ai/nomic-embed-text-v1.5"
     assert config.embeddings.api_key_env is None
 
     assert config.search.default_mode == "hybrid"
@@ -114,7 +114,7 @@ def test_missing_project_config():
         config = load_config(project_path=project_path)
 
         # Should just use defaults
-        assert config.index.include == ["src/", "lib/", "tests/"]
+        assert config.index.include == []
 
 
 def test_partial_config():
@@ -135,5 +135,5 @@ model = "custom-model"
         assert config.embeddings.model == "custom-model"
 
         # Everything else should be defaults
-        assert config.index.include == ["src/", "lib/", "tests/"]
+        assert config.index.include == []
         assert config.search.top_k == 10
