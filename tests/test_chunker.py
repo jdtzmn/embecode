@@ -788,3 +788,11 @@ class TestDefinitionExtraction:
         node = _make_node("decorated_definition", children=[inner])
         result = _extract_definition_names([node], "python")
         assert result == ["class Qux"]
+
+    def test_extract_multiple_definitions(self) -> None:
+        """Multiple nodes produce all named definitions."""
+        cls = _make_node("class_definition", name="MyClass")
+        method_a = _make_node("function_definition", name="method_a")
+        method_b = _make_node("function_definition", name="method_b")
+        result = _extract_definition_names([cls, method_a, method_b], "python")
+        assert result == ["class MyClass", "function method_a", "function method_b"]
