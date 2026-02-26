@@ -1715,3 +1715,58 @@ class TestGitignoreWatcher:
             # Also verify that update_file would not be called
             # (since nothing was added to pending changes)
             indexer.update_file.assert_not_called()
+
+    def test_non_gitignored_file_change_still_processed_normally(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Non-gitignored files that are modified should still be processed normally."""
+        from embecode.watcher import Watcher
+        from watchfiles import Change
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore that excludes *.log files
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("*.log\n")
+
+            # Create test files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "debug.log").write_text("log data")  # Gitignored
+            (project_path / "data.json").write_text("{}")  # NOT gitignored
+
+            # Create indexer
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+
+            # Create watcher
+            watcher = Watcher(project_path, mock_config, indexer)
+
+            # Mock the update_file method to verify it's called
+            indexer.update_file = Mock()
+
+            # Simulate modifying a NON-gitignored file
+            changes = [(Change.modified, str(project_path / "data.json"))]
+
+            # Process the changes through the watcher's internal logic
+            # The watcher should check _should_process_file and allow this file through
+            with watcher._pending_lock:
+                for change_type, path_str in changes:
+                    file_path = Path(path_str)
+
+                    # Skip .gitignore changes (handled separately)
+                    if file_path.name == ".gitignore":
+                        continue
+
+                    # This is the check from _run method
+                    if watcher._should_process_file(file_path):
+                        watcher._pending_changes[file_path] = change_type
+
+            # Verify that the non-gitignored file WAS added to pending changes
+            assert len(watcher._pending_changes) == 1, (
+                "Non-gitignored file should be added to pending changes"
+            )
+            assert project_path / "data.json" in watcher._pending_changes
+            assert watcher._pending_changes[project_path / "data.json"] == Change.modified
