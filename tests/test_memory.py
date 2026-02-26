@@ -204,7 +204,7 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
     # - Set up Database, Indexer, and config
     # - Capture baseline memory
     # - Start background peak memory monitoring
-    # - Run full index
+    # - Run full index (with timing)
     # - Stop peak monitoring and capture final memory
 
     # Placeholder values for diagnostic output (will be replaced with real values)
@@ -214,7 +214,12 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
     baseline_mb = 0.0
     peak_mb = 0.0
     final_mb = 0.0
-    duration_sec = 0.0
+
+    # Track wall-clock duration of indexing
+    start_time = time.perf_counter()
+    # TODO: Call indexer.start_full_index() here
+    end_time = time.perf_counter()
+    duration_sec = end_time - start_time
 
     # Print diagnostics (always printed regardless of pass/fail)
     print_diagnostics(
