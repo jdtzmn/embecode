@@ -9,7 +9,12 @@ import pytest
 
 from embecode.indexer import IndexStatus
 from embecode.searcher import ChunkResult, IndexNotReadyError
-from embecode.server import EmbeCodeServer, get_server, initialize_server
+from embecode.server import (
+    EmbeCodeServer,
+    EmbeddingModelChangedError,
+    get_server,
+    initialize_server,
+)
 
 
 @pytest.fixture
@@ -42,6 +47,8 @@ def mock_db() -> Mock:
     db.get_index_stats.return_value = {"total_chunks": 0, "files_indexed": 0, "last_updated": None}
     db.connect.return_value = None
     db.close.return_value = None
+    db.get_metadata.return_value = None  # First run by default
+    db.set_metadata.return_value = None
     return db
 
 
@@ -99,7 +106,7 @@ class TestEmbeCodeServer:
         mock_config: Mock,
         mock_db: Mock,
     ) -> None:
-        """Test server initialization with empty index starts background indexing."""
+        """Test server initialization with empty index starts background catch-up."""
         # Setup mocks
         mock_load_config.return_value = mock_config
         mock_cache_manager = Mock()
@@ -120,7 +127,53 @@ class TestEmbeCodeServer:
         mock_cache_manager.get_cache_dir.assert_called_once()
         mock_db.connect.assert_called_once()
 
-        # Verify background thread was started for indexing
+        # Verify model was stored (first run)
+        mock_db.set_metadata.assert_called_once_with("embedding_model", "test-model")
+
+        # Verify background thread was started for catch-up indexing
+        mock_thread.assert_called_once()
+        _args, kwargs = mock_thread.call_args
+        assert kwargs["daemon"] is True
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_initialization_existing_index(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Test server initialization with existing index still spawns catch-up thread."""
+        # Setup mocks
+        mock_load_config.return_value = mock_config
+        mock_config.daemon.auto_watch = True
+
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        mock_db.get_index_stats.return_value = {"total_chunks": 100}
+        mock_db.get_metadata.return_value = "test-model"  # Model already stored
+        mock_db_class.return_value = mock_db
+
+        # Initialize server
+        EmbeCodeServer(temp_project)
+
+        # Verify background catch-up thread was still started (unified path)
         mock_thread.assert_called_once()
         _args, kwargs = mock_thread.call_args
         assert kwargs["daemon"] is True
@@ -131,48 +184,10 @@ class TestEmbeCodeServer:
     @patch("embecode.server.Embedder")
     @patch("embecode.server.Searcher")
     @patch("embecode.server.Indexer")
-    @patch("embecode.server.Watcher")
-    def test_initialization_existing_index(
-        self,
-        mock_watcher_class: Mock,
-        mock_indexer_class: Mock,
-        mock_searcher_class: Mock,
-        mock_embedder_class: Mock,
-        mock_db_class: Mock,
-        mock_cache_manager_class: Mock,
-        mock_config_class: Mock,
-        temp_project: Path,
-        mock_config: Mock,
-        mock_db: Mock,
-    ) -> None:
-        """Test server initialization with existing index doesn't reindex."""
-        # Setup mocks
-        mock_config_class.load.return_value = mock_config
-        mock_config.daemon.auto_watch = True
-
-        mock_cache_manager = Mock()
-        cache_dir = temp_project / ".cache"
-        cache_dir.mkdir()
-        mock_cache_manager.get_cache_dir.return_value = cache_dir
-        mock_cache_manager_class.return_value = mock_cache_manager
-
-        mock_db.get_index_stats.return_value = {"total_chunks": 100}
-        mock_db_class.return_value = mock_db
-
-        # Initialize server
-        EmbeCodeServer(temp_project)
-
-        # Verify watcher was started
-        mock_watcher_class.assert_called_once()
-
-    @patch("embecode.server.EmbeCodeConfig")
-    @patch("embecode.server.CacheManager")
-    @patch("embecode.server.Database")
-    @patch("embecode.server.Embedder")
-    @patch("embecode.server.Searcher")
-    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
     def test_search_code_success(
         self,
+        mock_thread: Mock,
         mock_indexer_class: Mock,
         mock_searcher_class: Mock,
         mock_embedder_class: Mock,
@@ -229,8 +244,10 @@ class TestEmbeCodeServer:
     @patch("embecode.server.Embedder")
     @patch("embecode.server.Searcher")
     @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
     def test_search_code_not_ready(
         self,
+        mock_thread: Mock,
         mock_indexer_class: Mock,
         mock_searcher_class: Mock,
         mock_embedder_class: Mock,
@@ -285,8 +302,10 @@ class TestEmbeCodeServer:
     @patch("embecode.server.Embedder")
     @patch("embecode.server.Searcher")
     @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
     def test_get_index_status(
         self,
+        mock_thread: Mock,
         mock_indexer_class: Mock,
         mock_searcher_class: Mock,
         mock_embedder_class: Mock,
@@ -340,8 +359,10 @@ class TestEmbeCodeServer:
     @patch("embecode.server.Searcher")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Watcher")
+    @patch("embecode.server.threading.Thread")
     def test_cleanup(
         self,
+        mock_thread: Mock,
         mock_watcher_class: Mock,
         mock_indexer_class: Mock,
         mock_searcher_class: Mock,
@@ -370,8 +391,11 @@ class TestEmbeCodeServer:
         mock_watcher = Mock()
         mock_watcher_class.return_value = mock_watcher
 
-        # Initialize server
+        # Initialize server (thread is mocked, so _catchup_index doesn't run)
         server = EmbeCodeServer(temp_project)
+
+        # Manually run _catchup_index to start watcher (simulating thread completion)
+        server._catchup_index()
 
         # Cleanup
         server.cleanup()
@@ -386,8 +410,10 @@ class TestEmbeCodeServer:
     @patch("embecode.server.Embedder")
     @patch("embecode.server.Searcher")
     @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
     def test_search_with_path_filter(
         self,
+        mock_thread: Mock,
         mock_indexer_class: Mock,
         mock_searcher_class: Mock,
         mock_embedder_class: Mock,
@@ -422,6 +448,306 @@ class TestEmbeCodeServer:
 
         # Verify path was passed to searcher
         mock_searcher.search.assert_called_once_with("test", mode="hybrid", top_k=5, path="src/")
+
+
+class TestCatchUpStartup:
+    """Tests for catch-up indexing startup logic and embedding model detection."""
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_startup_always_spawns_catchup_thread(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Both empty and non-empty DBs result in a background thread being spawned."""
+        mock_load_config.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        # Test with empty DB
+        mock_db.get_index_stats.return_value = {"total_chunks": 0}
+        mock_db_class.return_value = mock_db
+        EmbeCodeServer(temp_project)
+        assert mock_thread.call_count == 1
+
+        # Test with non-empty DB
+        mock_thread.reset_mock()
+        mock_db.get_index_stats.return_value = {"total_chunks": 100}
+        EmbeCodeServer(temp_project)
+        assert mock_thread.call_count == 1
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Watcher")
+    @patch("embecode.server.threading.Thread")
+    def test_startup_catchup_starts_watcher_after_completion(
+        self,
+        mock_thread: Mock,
+        mock_watcher_class: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Catch-up thread completes. Watcher is started afterward."""
+        mock_load_config.return_value = mock_config
+        mock_config.daemon.auto_watch = True
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+        mock_db_class.return_value = mock_db
+
+        server = EmbeCodeServer(temp_project)
+
+        # Watcher not started yet (thread is mocked)
+        mock_watcher_class.assert_not_called()
+
+        # Manually run _catchup_index to simulate thread completion
+        server._catchup_index()
+
+        # Now watcher should be started
+        mock_watcher_class.assert_called_once()
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Watcher")
+    @patch("embecode.server.threading.Thread")
+    def test_startup_catchup_failure_still_starts_watcher(
+        self,
+        mock_thread: Mock,
+        mock_watcher_class: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Catch-up thread raises an exception. Watcher is still started."""
+        mock_load_config.return_value = mock_config
+        mock_config.daemon.auto_watch = True
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+        mock_db_class.return_value = mock_db
+
+        # Make catch-up raise an exception
+        mock_indexer = mock_indexer_class.return_value
+        mock_indexer.start_catchup_index.side_effect = RuntimeError("indexing failed")
+
+        server = EmbeCodeServer(temp_project)
+
+        # Manually run _catchup_index (simulating thread)
+        server._catchup_index()  # Should not raise
+
+        # Watcher should still be started despite the failure
+        mock_watcher_class.assert_called_once()
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_startup_embedding_model_match_proceeds(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Stored model matches config model. Server initializes normally."""
+        mock_load_config.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        # Stored model matches configured model
+        mock_db.get_metadata.return_value = "test-model"
+        mock_db_class.return_value = mock_db
+
+        # Should not raise
+        server = EmbeCodeServer(temp_project)
+        assert server is not None
+
+        # set_metadata should NOT be called (model already stored and matches)
+        mock_db.set_metadata.assert_not_called()
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_startup_embedding_model_mismatch_refuses_to_start(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Stored model differs from config model. Raises EmbeddingModelChangedError."""
+        mock_load_config.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        # Stored model differs from configured model ("test-model")
+        mock_db.get_metadata.return_value = "model-a"
+        mock_db_class.return_value = mock_db
+
+        with pytest.raises(EmbeddingModelChangedError) as exc_info:
+            EmbeCodeServer(temp_project)
+
+        error_msg = str(exc_info.value)
+        assert "model-a" in error_msg
+        assert "test-model" in error_msg
+        assert "index.db" in error_msg
+
+        # Thread should NOT have been started
+        mock_thread.assert_not_called()
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_startup_no_stored_model_stores_current(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """First run (no metadata). Server stores current model in DB and proceeds."""
+        mock_load_config.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        # No stored model (first run)
+        mock_db.get_metadata.return_value = None
+        mock_db_class.return_value = mock_db
+
+        server = EmbeCodeServer(temp_project)
+        assert server is not None
+
+        # Model should be stored
+        mock_db.set_metadata.assert_called_once_with("embedding_model", "test-model")
+
+        # Catch-up thread should still be spawned
+        mock_thread.assert_called_once()
+
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_startup_stores_model_before_catchup(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_load_config: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Model is stored during __init__ (main thread), not after catch-up."""
+        mock_load_config.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        # Track call order
+        call_order: list[str] = []
+        mock_db.get_metadata.return_value = None
+        mock_db.set_metadata.side_effect = lambda k, v: call_order.append("set_metadata")
+        mock_db_class.return_value = mock_db
+
+        def thread_start_side_effect():
+            call_order.append("thread_start")
+
+        mock_thread_instance = Mock()
+        mock_thread_instance.start.side_effect = thread_start_side_effect
+        mock_thread.return_value = mock_thread_instance
+
+        EmbeCodeServer(temp_project)
+
+        # set_metadata must happen before thread.start()
+        assert call_order == ["set_metadata", "thread_start"]
 
 
 class TestGlobalServerManagement:

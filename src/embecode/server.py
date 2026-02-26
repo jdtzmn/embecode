@@ -23,6 +23,11 @@ from embecode.watcher import Watcher
 
 logger = logging.getLogger(__name__)
 
+
+class EmbeddingModelChangedError(RuntimeError):
+    """Raised when the configured embedding model differs from the one used to build the index."""
+
+
 # Create FastMCP server instance
 mcp = FastMCP(
     name="embecode",
@@ -68,40 +73,44 @@ class EmbeCodeServer:
             embedder=self.embedder,
         )
 
-        # Initialize watcher (will be started after initial indexing)
+        # Initialize watcher (will be started after catch-up indexing)
         self.watcher: Watcher | None = None
 
-        # Start initial indexing in background if index is empty
-        if self.db.get_index_stats()["total_chunks"] == 0:
-            logger.info("Starting initial full index in background")
-            threading.Thread(target=self._initial_index, daemon=True).start()
-        else:
-            logger.info(
-                f"Index already exists ({self.db.get_index_stats()['total_chunks']} chunks)"
+        # Embedding model change detection
+        stored_model = self.db.get_metadata("embedding_model")
+        configured_model = self.config.embeddings.model
+        if stored_model is None:
+            # First run or fresh DB: store the current model
+            self.db.set_metadata("embedding_model", configured_model)
+        elif stored_model != configured_model:
+            db_path = self.cache_dir / "index.db"
+            raise EmbeddingModelChangedError(
+                f"Embedding model changed from '{stored_model}' to '{configured_model}'. "
+                f"Existing embeddings are incompatible. Delete the index at {db_path} "
+                f"and restart, or revert the model in your config."
             )
-            # Start watcher immediately if auto_watch is enabled
-            if self.config.daemon.auto_watch:
-                self._start_watcher()
+
+        # Always spawn background catch-up thread
+        logger.info("Starting catch-up index in background")
+        threading.Thread(target=self._catchup_index, daemon=True).start()
 
         # Update cache access time
         self.cache_manager.update_access_time(self.project_path)
 
-    def _initial_index(self) -> None:
+    def _catchup_index(self) -> None:
         """
-        Perform initial full index in background thread.
+        Perform catch-up indexing in background thread.
 
+        Detects and indexes missing/modified files, removes stale entries.
         After completion, starts the file watcher if enabled.
         """
         try:
-            logger.info("Starting full index...")
-            self.indexer.start_full_index(background=False)
-            logger.info("Full index complete")
-
-            # Start watcher after indexing completes
+            self.indexer.start_catchup_index(background=False)
+        except Exception:
+            logger.exception("Catch-up index failed")
+        finally:
             if self.config.daemon.auto_watch:
                 self._start_watcher()
-        except Exception:
-            logger.exception("Full index failed")
 
     def _start_watcher(self) -> None:
         """Start the file watcher if not already running."""
