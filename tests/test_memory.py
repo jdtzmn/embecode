@@ -128,6 +128,51 @@ def get_memory_usage_mb() -> float:
 
 
 # ============================================================================
+# Diagnostic Output
+# ============================================================================
+
+
+def print_diagnostics(
+    files_generated: int,
+    files_indexed: int,
+    chunks_stored: int,
+    baseline_mb: float,
+    peak_mb: float,
+    final_mb: float,
+    duration_sec: float,
+) -> None:
+    """Print comprehensive diagnostic information from the memory test.
+
+    Args:
+        files_generated: Total number of files generated in synthetic codebase
+        files_indexed: Total number of files successfully indexed
+        chunks_stored: Total number of chunks stored in database
+        baseline_mb: Memory usage before indexing started (MB)
+        peak_mb: Peak memory usage during indexing (MB)
+        final_mb: Memory usage after indexing completed (MB)
+        duration_sec: Wall-clock duration of indexing in seconds
+    """
+    print("\n" + "=" * 70)
+    print("MEMORY LEAK TEST DIAGNOSTICS")
+    print("=" * 70)
+    print(f"\nFile Statistics:")
+    print(f"  Total files generated:  {files_generated:6,}")
+    print(f"  Total files indexed:    {files_indexed:6,}")
+    print(f"  Total chunks stored:    {chunks_stored:6,}")
+    print(f"\nMemory Usage (MB):")
+    print(f"  Baseline (before):      {baseline_mb:8.2f} MB")
+    print(f"  Peak (during):          {peak_mb:8.2f} MB")
+    print(f"  Final (after):          {final_mb:8.2f} MB")
+    print(f"  Delta (final - base):   {final_mb - baseline_mb:8.2f} MB")
+    print(f"  Peak delta:             {peak_mb - baseline_mb:8.2f} MB")
+    print(f"\nTiming:")
+    print(f"  Indexing duration:      {duration_sec:8.2f} seconds")
+    if duration_sec > 0:
+        print(f"  Files per second:       {files_indexed / duration_sec:8.2f}")
+    print("\n" + "=" * 70 + "\n")
+
+
+# ============================================================================
 # Main Memory Leak Test
 # ============================================================================
 
@@ -158,7 +203,29 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
     # - Start background peak memory monitoring
     # - Run full index
     # - Stop peak monitoring and capture final memory
-    # - Print diagnostics
-    # - Assert memory constraints
+
+    # Placeholder values for diagnostic output (will be replaced with real values)
+    files_generated = 0
+    files_indexed = 0
+    chunks_stored = 0
+    baseline_mb = 0.0
+    peak_mb = 0.0
+    final_mb = 0.0
+    duration_sec = 0.0
+
+    # Print diagnostics (always printed regardless of pass/fail)
+    print_diagnostics(
+        files_generated=files_generated,
+        files_indexed=files_indexed,
+        chunks_stored=chunks_stored,
+        baseline_mb=baseline_mb,
+        peak_mb=peak_mb,
+        final_mb=final_mb,
+        duration_sec=duration_sec,
+    )
+
+    # TODO: Assert memory constraints
+    # - Assert peak_mb < 2000.0 (2 GB)
+    # - Assert final_mb < 2000.0 (2 GB)
 
     assert False, "Test not yet implemented"
