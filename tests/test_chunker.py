@@ -808,3 +808,9 @@ class TestDefinitionExtraction:
         node = _make_node("class_declaration", name="Foo")
         result = _extract_definition_names([node], "typescript")
         assert result == ["class Foo"]
+
+    def test_extract_typescript_interface(self) -> None:
+        """TypeScript `interface Bar {}` produces `interface Bar`."""
+        node = _make_node("interface_declaration", name="Bar")
+        result = _extract_definition_names([node], "typescript")
+        assert result == ["interface Bar"]
