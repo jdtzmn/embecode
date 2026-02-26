@@ -316,7 +316,7 @@ class Indexer:
         try:
             with open(gitignore_path, encoding="utf-8") as f:
                 patterns = f.read().splitlines()
-            spec = pathspec.PathSpec.from_lines(pathspec.patterns.GitWildMatchPattern, patterns)
+            spec = pathspec.PathSpec.from_lines("gitignore", patterns)
             self._gitignore_cache[directory] = spec
             return spec
         except Exception as e:
@@ -353,9 +353,72 @@ class Indexer:
 
         return files
 
+    def _is_gitignored(self, file_path: Path) -> bool:
+        """
+        Check if a file is ignored by any .gitignore files in its ancestor directories.
+
+        Processes .gitignore files from project root down to the file's parent directory,
+        with lower-level files taking precedence.
+
+        Args:
+            file_path: Path to check.
+
+        Returns:
+            True if file is gitignored.
+        """
+        try:
+            relative_path = file_path.relative_to(self.project_path)
+        except ValueError:
+            # File is outside project path
+            return False
+
+        # Don't index .gitignore files themselves
+        if file_path.name == ".gitignore":
+            return True
+
+        # Collect all ancestor directories from project root to file's parent
+        ancestor_dirs = []
+        current = self.project_path
+        for part in relative_path.parent.parts:
+            current = current / part
+            ancestor_dirs.append(current)
+
+        # Also check project root
+        all_dirs = [self.project_path] + ancestor_dirs
+
+        # Track the final match result across all .gitignore files
+        # None = no match yet, True = ignored, False = negated (not ignored)
+        final_match: bool | None = None
+
+        # Process .gitignore files from root to file's parent (lowest precedence to highest)
+        for directory in all_dirs:
+            spec = self._load_gitignore(directory)
+            if spec is None:
+                continue
+
+            # Get path relative to this .gitignore's directory
+            try:
+                rel_to_gitignore = file_path.relative_to(directory)
+            except ValueError:
+                continue
+
+            # Check if this spec matches the file
+            # PathSpec.match_file returns True if the file matches any pattern
+            # We need to check the last matching pattern to determine if it's negated
+            rel_str = str(rel_to_gitignore)
+
+            # Check each pattern in order to find the last match
+            for pattern in spec.patterns:
+                if pattern.match_file(rel_str):
+                    # pattern.include=True means ignore (exclude from index)
+                    # pattern.include=False means negation (include in index despite previous ignore)
+                    final_match = pattern.include
+
+        return final_match if final_match is not None else False
+
     def _should_index_file(self, file_path: Path) -> bool:
         """
-        Check if a file should be indexed based on include/exclude rules.
+        Check if a file should be indexed based on gitignore and include/exclude rules.
 
         Args:
             file_path: Path to check.
@@ -372,7 +435,11 @@ class Indexer:
 
         relative_str = str(relative_path)
 
-        # Check excludes first (higher priority)
+        # Check gitignore first (highest priority)
+        if self._is_gitignored(file_path):
+            return False
+
+        # Check excludes
         for pattern in self.config.index.exclude:
             if self._matches_pattern(relative_str, pattern):
                 return False
