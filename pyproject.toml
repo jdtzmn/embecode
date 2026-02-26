@@ -78,6 +78,10 @@ skip-magic-trailing-comma = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=embecode --cov-report=term-missing --cov-report=xml"
+markers = [
+  "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+  "integration: marks tests as integration tests",
+]
 
 [tool.coverage.run]
 source = ["src/embecode"]
