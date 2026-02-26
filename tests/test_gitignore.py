@@ -1770,3 +1770,85 @@ class TestGitignoreWatcher:
             )
             assert project_path / "data.json" in watcher._pending_changes
             assert watcher._pending_changes[project_path / "data.json"] == Change.modified
+
+
+class TestGitignoreEdgeCases:
+    """Test suite for .gitignore edge cases and special scenarios."""
+
+    @pytest.fixture
+    def mock_config(self) -> EmbeCodeConfig:
+        """Create a mock config with empty include (index everything)."""
+        config = Mock(spec=EmbeCodeConfig)
+        config.index = IndexConfig(
+            include=[],  # Empty = index everything
+            exclude=["node_modules/", ".git/"],
+            languages=LanguageConfig(python=1500, default=1000),
+        )
+        config.embeddings = EmbeddingsConfig(model="test-model")
+        return config
+
+    @pytest.fixture
+    def mock_db(self) -> Mock:
+        """Create a mock database."""
+        db = Mock()
+        db.get_index_stats.return_value = {
+            "files_indexed": 0,
+            "total_chunks": 0,
+            "last_updated": None,
+        }
+        return db
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        """Create a mock embedder."""
+        return Mock()
+
+    def test_gitignore_with_windows_line_endings(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Gitignore with Windows CRLF line endings should be parsed correctly."""
+        # TODO: Implement test for Windows line endings (\r\n)
+        pass
+
+    def test_trailing_space_stripped_unless_escaped(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Trailing spaces in patterns should be stripped unless escaped with backslash."""
+        # TODO: Implement test for trailing space handling
+        pass
+
+    def test_backslash_escapes_special_chars(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Backslash should escape special characters like * to match literally."""
+        # TODO: Implement test for backslash escaping
+        pass
+
+    def test_gitignore_caching_across_collect_files(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Each .gitignore file should only be read once per indexing run."""
+        # TODO: Implement test for .gitignore caching behavior
+        pass
+
+    def test_project_with_only_gitignored_files(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Project where all files are gitignored should return empty list without error."""
+        # TODO: Implement test for all-gitignored project
+        pass
