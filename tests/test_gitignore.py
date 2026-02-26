@@ -1361,3 +1361,55 @@ class TestGitignoreAndEmbeCodeConfig:
             ]
 
             assert relative_files == expected
+
+    def test_config_include_cannot_override_gitignore(
+        self,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Config include pattern cannot override gitignore - gitignored files stay excluded."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore that excludes *.log files
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("*.log\n")
+
+            # Create a subdirectory with some files
+            src_dir = project_path / "src"
+            src_dir.mkdir()
+
+            # Create test files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "debug.log").write_text("log content")  # Gitignored
+            (src_dir / "module.py").write_text("def func(): pass")
+            (src_dir / "error.log").write_text("error log")  # Gitignored
+
+            # Create config with explicit include pattern for src/ directory
+            # This should NOT override the gitignore rule for *.log files
+            config = Mock(spec=EmbeCodeConfig)
+            config.index = IndexConfig(
+                include=["src/"],  # Explicitly include src/ directory
+                exclude=["node_modules/", ".git/"],
+                languages=LanguageConfig(python=1500, default=1000),
+            )
+            config.embeddings = EmbeddingsConfig(model="test-model")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # src/error.log should still be excluded by gitignore
+            # even though include=["src/"] explicitly includes the src/ directory
+            # main.py is NOT included because it doesn't match include pattern
+            expected = [
+                Path("src/module.py"),  # Included by config include pattern
+                # src/error.log is excluded by .gitignore (takes priority)
+                # debug.log is excluded by .gitignore
+                # main.py is NOT included (doesn't match include pattern)
+            ]
+
+            assert relative_files == expected
