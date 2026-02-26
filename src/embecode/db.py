@@ -87,7 +87,8 @@ class Database:
                 content TEXT NOT NULL,
                 context TEXT,
                 hash VARCHAR NOT NULL,
-                created_at TIMESTAMP NOT NULL
+                created_at TIMESTAMP NOT NULL,
+                definitions TEXT NOT NULL DEFAULT ''
             )
         """)
 
@@ -128,6 +129,15 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_chunks_hash
             ON chunks(hash)
         """)
+
+        # Migration: add definitions column if it doesn't exist (for existing DBs)
+        try:
+            self._conn.execute("""
+                ALTER TABLE chunks ADD COLUMN definitions TEXT DEFAULT ''
+            """)
+        except Exception:
+            # Column already exists — skip
+            pass
 
         # Create FTS index for keyword search
         # Note: We use the simple PRAGMA approach which creates the index dynamically
