@@ -347,3 +347,53 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_trailing_slash_matches_directories_only(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with trailing slash (e.g., build/) should match directories only, not files with same name."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with trailing slash pattern
+            (project_path / ".gitignore").write_text("dist/\n")
+
+            # Create a directory named 'dist' with files inside (should all be ignored)
+            dist_dir = project_path / "dist"
+            dist_dir.mkdir()
+            (dist_dir / "output.js").write_text("console.log('build');")
+            (dist_dir / "bundle.js").write_text("console.log('bundle');")
+
+            # Create a nested file inside dist directory (should also be ignored)
+            nested_dist = dist_dir / "nested"
+            nested_dist.mkdir()
+            (nested_dist / "deep.js").write_text("console.log('deep');")
+
+            # Create a FILE literally named 'dist' in a different location (should NOT be ignored - pattern only matches directories)
+            # Put it in a subdirectory to avoid name collision
+            src_dir = project_path / "src"
+            src_dir.mkdir()
+            (src_dir / "dist").write_text("this is a file named dist")
+            (src_dir / "module.py").write_text("class MyClass: pass")
+
+            # Create some other files that should be indexed
+            (project_path / "main.py").write_text("print('hello')")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # The file named 'dist' should be included, but everything in dist/ directory should be excluded
+            expected = [
+                Path("main.py"),
+                Path("src/dist"),  # File, not directory - should be included
+                Path("src/module.py"),
+            ]
+
+            assert relative_files == expected
