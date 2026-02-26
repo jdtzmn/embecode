@@ -7,6 +7,7 @@ from pathlib import Path
 
 from embecode.config import (
     EmbeCodeConfig,
+    SearchConfig,
     get_chunk_size_for_language,
     load_config,
 )
@@ -113,6 +114,12 @@ def test_missing_project_config():
 
         # Should just use defaults
         assert config.index.include == []
+
+
+def test_search_top_k_default_is_10():
+    """Test that SearchConfig defaults top_k to 10 (TAS-41)."""
+    search = SearchConfig()
+    assert search.top_k == 10
 
 
 def test_partial_config():

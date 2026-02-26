@@ -904,3 +904,177 @@ def test_get_indexed_files_with_timestamps(temp_db):
     # Verify values are datetime objects
     assert isinstance(result["src/main.py"], datetime)
     assert isinstance(result["src/utils.py"], datetime)
+
+
+def test_chunks_table_has_definitions_column(temp_db):
+    """Test that the chunks table has a definitions column after connect()."""
+    temp_db.connect()
+
+    cols = temp_db._conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name='chunks' AND column_name='definitions'"
+    ).fetchall()
+    assert len(cols) == 1
+
+
+def test_insert_chunk_with_definitions(temp_db):
+    """Test inserting a chunk with a definitions field and retrieving it."""
+    temp_db.connect()
+
+    chunk_records = [
+        {
+            "file_path": "test.py",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 5,
+            "content": "def foo(): pass\nclass Bar: pass",
+            "context": "File: test.py\nLanguage: python\nDefines: function foo, class Bar",
+            "hash": "abc123",
+            "definitions": "function foo, class Bar",
+            "embedding": [0.1] * 384,
+        }
+    ]
+    temp_db.insert_chunks(chunk_records)
+
+    result = temp_db._conn.execute("SELECT definitions FROM chunks").fetchone()
+    assert result is not None
+    assert result[0] == "function foo, class Bar"
+
+
+def test_vector_search_returns_definitions(temp_db):
+    """Test that vector search results include a definitions key."""
+    temp_db.connect()
+
+    chunk_records = [
+        {
+            "file_path": "test1.py",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 5,
+            "content": "def hello(): pass",
+            "context": "test1.py: hello",
+            "hash": "hash1",
+            "definitions": "function hello",
+            "embedding": [1.0, 0.0, 0.0],
+        },
+        {
+            "file_path": "test2.py",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 3,
+            "content": "x = 1",
+            "context": "test2.py",
+            "hash": "hash2",
+            "definitions": "",
+            "embedding": [0.0, 1.0, 0.0],
+        },
+    ]
+    temp_db.insert_chunks(chunk_records)
+
+    query_embedding = [0.9, 0.1, 0.0]
+    results = temp_db.vector_search(query_embedding, top_k=2)
+
+    if results:  # VSS extension may not be available in test environment
+        assert "definitions" in results[0]
+
+
+def test_bm25_search_returns_definitions(temp_db):
+    """Test that BM25 search results include a definitions key."""
+    temp_db.connect()
+
+    chunk_records = [
+        {
+            "file_path": "test1.py",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 5,
+            "content": "def calculate_total(items): return sum(items)",
+            "context": "test1.py: calculate_total",
+            "hash": "hash1",
+            "definitions": "function calculate_total",
+            "embedding": [0.1] * 384,
+        },
+        {
+            "file_path": "test2.py",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 3,
+            "content": "x = 42",
+            "context": "test2.py",
+            "hash": "hash2",
+            "definitions": "",
+            "embedding": [0.2] * 384,
+        },
+    ]
+    temp_db.insert_chunks(chunk_records)
+
+    results = temp_db.bm25_search("calculate", top_k=10)
+
+    assert len(results) >= 1
+    assert "definitions" in results[0]
+
+
+def test_existing_db_migration_adds_definitions():
+    """Test that re-running _initialize_schema() on a legacy DB adds the definitions column."""
+    import duckdb
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "legacy.db"
+
+        # Create a legacy database WITHOUT the definitions column
+        conn = duckdb.connect(str(db_path))
+        conn.execute("""
+            CREATE TABLE chunks (
+                id VARCHAR PRIMARY KEY,
+                file_path VARCHAR NOT NULL,
+                language VARCHAR NOT NULL,
+                start_line INTEGER NOT NULL,
+                end_line INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                context TEXT,
+                hash VARCHAR NOT NULL,
+                created_at TIMESTAMP NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE embeddings (
+                chunk_id VARCHAR PRIMARY KEY,
+                embedding FLOAT[] NOT NULL,
+                FOREIGN KEY (chunk_id) REFERENCES chunks(id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE files (
+                path VARCHAR PRIMARY KEY,
+                chunk_count INTEGER NOT NULL,
+                last_indexed TIMESTAMP NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE metadata (
+                key VARCHAR PRIMARY KEY,
+                value VARCHAR NOT NULL
+            )
+        """)
+        conn.close()
+
+        # Verify definitions column does NOT exist
+        conn = duckdb.connect(str(db_path))
+        cols = conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='chunks' AND column_name='definitions'"
+        ).fetchall()
+        assert len(cols) == 0
+        conn.close()
+
+        # Open with Database and let _initialize_schema run the migration
+        db = Database(db_path)
+        db.connect()
+
+        # Verify definitions column was added
+        cols = db._conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='chunks' AND column_name='definitions'"
+        ).fetchall()
+        assert len(cols) == 1
+        db.close()

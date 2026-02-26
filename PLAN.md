@@ -93,12 +93,12 @@ No normalization or hyperparameter tuning needed.
 search_code(
     query: str,
     mode: str = "hybrid",     # "semantic" | "keyword" | "hybrid"
-    top_k: int = 5,
+    top_k: int = 10,
     path: str | None = None   # prefix filter e.g. "apps/ui"
 ) -> list[ChunkResult]
 ```
 
-Returns full chunk text inline (not snippets) with file path, language, line range, and relevance score. Balances context window usage vs. round-trip cost — default `top_k=5` keeps context lean.
+Returns concise results with file path, language, line range, definition names, a 2-line preview, and relevance score. Default `top_k=10`.
 
 ### `index_status`
 ```python
