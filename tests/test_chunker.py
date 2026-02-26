@@ -835,3 +835,18 @@ class TestDefinitionExtraction:
         assert result_toml == []
         result_json = _extract_definition_names([node], "json")
         assert result_json == []
+
+    def test_definitions_in_context(self) -> None:
+        """Chunk context includes `Defines: function foo` when definitions present."""
+        source = b"def foo():\n    pass\n"
+        node = _make_node("function_definition", name="foo")
+        node.start_byte = 0
+        node.end_byte = len(source)
+        node.start_point = (0, 0)
+        node.end_point = (1, 8)
+        node.children = []
+
+        chunk = _merge_nodes_into_chunk([node], source, "test.py", "python")
+
+        assert chunk is not None
+        assert "Defines: function foo" in chunk.context
