@@ -298,3 +298,52 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_middle_slash_anchors_to_gitignore_dir(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with slash in middle (e.g., foo/bar.txt) should be anchored to gitignore directory."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with middle-slash pattern
+            (project_path / ".gitignore").write_text("foo/bar.txt\n")
+
+            # Create foo directory at root with bar.txt (should be ignored)
+            foo_dir = project_path / "foo"
+            foo_dir.mkdir()
+            (foo_dir / "bar.txt").write_text("should be ignored")
+            (foo_dir / "other.txt").write_text("not ignored")
+
+            # Create subdirectory with its own foo/bar.txt (should NOT be ignored - pattern is anchored to root)
+            subdir = project_path / "sub"
+            subdir.mkdir()
+            sub_foo_dir = subdir / "foo"
+            sub_foo_dir.mkdir()
+            (sub_foo_dir / "bar.txt").write_text("should not be ignored")
+            (sub_foo_dir / "other.txt").write_text("also not ignored")
+
+            # Create some other files
+            (project_path / "main.py").write_text("print('hello')")
+            (subdir / "module.py").write_text("class MyClass: pass")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Only root-level foo/bar.txt should be excluded
+            expected = [
+                Path("foo/other.txt"),
+                Path("main.py"),
+                Path("sub/foo/bar.txt"),  # NOT ignored (pattern is anchored to root)
+                Path("sub/foo/other.txt"),
+                Path("sub/module.py"),
+            ]
+
+            assert relative_files == expected
