@@ -1117,3 +1117,78 @@ class TestGitignoreNesting:
             ]
 
             assert relative_files == expected
+
+    def test_deeply_nested_gitignore(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Three levels of .gitignore files (root, root/a, root/a/b) should apply with proper precedence."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create root .gitignore that excludes all .log files
+            root_gitignore = project_path / ".gitignore"
+            root_gitignore.write_text("*.log\n")
+
+            # Create files in root directory
+            (project_path / "root.py").write_text("print('root')")
+            (project_path / "root.log").write_text("root log")  # Excluded by root .gitignore
+
+            # Create first level subdirectory 'a' with .gitignore that re-includes important.log
+            a_dir = project_path / "a"
+            a_dir.mkdir()
+            a_gitignore = a_dir / ".gitignore"
+            a_gitignore.write_text(
+                "!important.log\n*.tmp\n"
+            )  # Re-include important.log, exclude *.tmp
+
+            # Create files in 'a' directory
+            (a_dir / "module.py").write_text("print('a')")
+            (a_dir / "important.log").write_text("important")  # Re-included by a/.gitignore
+            (a_dir / "other.log").write_text("other log")  # Still excluded by root .gitignore
+            (a_dir / "temp.tmp").write_text("temp")  # Excluded by a/.gitignore
+
+            # Create second level subdirectory 'a/b' with .gitignore that excludes *.py
+            b_dir = a_dir / "b"
+            b_dir.mkdir()
+            b_gitignore = b_dir / ".gitignore"
+            b_gitignore.write_text("*.py\n!critical.py\n")  # Exclude *.py except critical.py
+
+            # Create files in 'a/b' directory
+            (b_dir / "deep.py").write_text("print('deep')")  # Excluded by b/.gitignore
+            (b_dir / "critical.py").write_text("print('critical')")  # Re-included by b/.gitignore
+            (b_dir / "important.log").write_text(
+                "important deep"
+            )  # Re-included by a/.gitignore (inherited)
+            (b_dir / "data.json").write_text('{"key": "value"}')
+            (b_dir / "cache.tmp").write_text("cache")  # Excluded by a/.gitignore (inherited)
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Verify precedence rules:
+            # - Root .gitignore excludes *.log (but a/.gitignore re-includes important.log)
+            # - a/.gitignore re-includes important.log and excludes *.tmp
+            # - b/.gitignore excludes *.py except critical.py
+            # - Rules from parent .gitignore files apply to child directories
+            expected = [
+                Path("a/b/critical.py"),  # Re-included by b/.gitignore
+                Path("a/b/data.json"),  # NOT ignored
+                Path("a/b/important.log"),  # Re-included by a/.gitignore (inherited)
+                Path("a/important.log"),  # Re-included by a/.gitignore
+                Path("a/module.py"),  # NOT ignored
+                Path("root.py"),  # NOT ignored
+                # root.log is excluded by root .gitignore
+                # a/other.log is excluded by root .gitignore (not re-included)
+                # a/temp.tmp is excluded by a/.gitignore
+                # a/b/deep.py is excluded by b/.gitignore
+                # a/b/cache.tmp is excluded by a/.gitignore (inherited)
+            ]
+
+            assert relative_files == expected
