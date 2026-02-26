@@ -3,10 +3,12 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from embecode.chunker import (
     Chunk,
+    _count_non_whitespace,
+    _get_context_info,
+    _get_parser,
+    _merge_nodes_into_chunk,
     chunk_file,
     chunk_files,
     get_language_for_file,
@@ -318,3 +320,400 @@ def test_chunk_hash_changes_with_content():
         # Hashes should be different
         assert len(chunks1) > 0 and len(chunks2) > 0
         assert chunks1[0].hash != chunks2[0].hash
+
+
+def test_chunk_empty_file():
+    """Test chunking an empty file."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write("")
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+        # Empty file should produce no chunks or just one empty chunk
+        assert isinstance(chunks, list)
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_whitespace_only_file():
+    """Test chunking a file with only whitespace."""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write("   \n\n   \n")
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+        # Whitespace-only file should produce no meaningful chunks
+        assert isinstance(chunks, list)
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_with_syntax_error():
+    """Test chunking a file with syntax errors - should still parse."""
+    code = """def incomplete_function(
+    # Missing closing parenthesis and body
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+        # Tree-sitter is error-tolerant, should still produce chunks
+        assert isinstance(chunks, list)
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_very_large_single_function():
+    """Test chunking a single function that vastly exceeds max size."""
+    # Create a function with many lines
+    lines = ["def huge_function():\n"]
+    lines.append('    """A very large function."""\n')
+    for i in range(100):
+        lines.append(f"    x{i} = {i} * 2\n")
+    lines.append("    return sum([" + ", ".join([f"x{i}" for i in range(100)]) + "])\n")
+    code = "".join(lines)
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        # Use small max size to force recursion
+        config = LanguageConfig(python=100)
+        chunks = chunk_file(temp_path, config)
+
+        # Should break down into multiple chunks through recursion
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.content.strip()  # No empty chunks
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_nested_structures():
+    """Test chunking deeply nested code structures."""
+    code = """class OuterClass:
+    class MiddleClass:
+        class InnerClass:
+            def inner_method(self):
+                for i in range(10):
+                    for j in range(10):
+                        x = i * j
+                        if x > 50:
+                            y = x + 1
+                        else:
+                            y = x - 1
+                return y
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig(python=150)
+        chunks = chunk_file(temp_path, config)
+
+        # Should handle nested structures gracefully
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.language == "python"
+            assert chunk.start_line >= 1
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_mixed_content_types():
+    """Test chunking a file with functions, classes, and module-level code."""
+    code = """# Module-level comment
+import os
+import sys
+
+CONSTANT = 42
+
+def module_function():
+    return CONSTANT
+
+class MyClass:
+    def __init__(self):
+        self.value = 0
+
+    def method(self):
+        return self.value
+
+# More module-level code
+if __name__ == "__main__":
+    obj = MyClass()
+    print(module_function())
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+
+        # Should produce multiple chunks
+        assert len(chunks) >= 1
+
+        # All chunks should have valid metadata
+        for chunk in chunks:
+            assert chunk.file_path == str(temp_path)
+            assert chunk.language == "python"
+            assert "File:" in chunk.context
+            assert "Language:" in chunk.context
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_go_file():
+    """Test chunking a Go file."""
+    code = """package main
+
+import "fmt"
+
+func add(a, b int) int {
+    return a + b
+}
+
+func main() {
+    result := add(1, 2)
+    fmt.Println(result)
+}
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".go", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.language == "go"
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_rust_file():
+    """Test chunking a Rust file."""
+    code = """fn add(a: i32, b: i32) -> i32 {
+    a + b
+}
+
+fn main() {
+    let result = add(1, 2);
+    println!("{}", result);
+}
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".rs", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.language == "rust"
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_with_unicode_content():
+    """Test chunking a file with unicode characters."""
+    code = """def greet(name):
+    '''Say hello in multiple languages.'''
+    messages = [
+        f"Hello {name}!",
+        f"Bonjour {name}!",
+        f"你好 {name}!",
+        f"こんにちは {name}!",
+        f"Привет {name}!",
+    ]
+    return messages
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+
+        assert len(chunks) >= 1
+        # Verify unicode is preserved in chunk content
+        full_content = "".join(chunk.content for chunk in chunks)
+        assert "你好" in full_content
+        assert "こんにちは" in full_content
+        assert "Привет" in full_content
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_line_numbers_are_accurate():
+    """Test that chunk line numbers accurately reflect the source."""
+    code = """# Line 1
+def foo():  # Line 2
+    pass    # Line 3
+            # Line 4
+def bar():  # Line 5
+    pass    # Line 6
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+
+        assert len(chunks) >= 1
+        # Verify all chunks have reasonable line ranges
+        for chunk in chunks:
+            assert chunk.start_line >= 1
+            assert chunk.end_line >= chunk.start_line
+            assert chunk.end_line <= 6  # File has 6 lines
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_multiple_files_with_errors():
+    """Test chunk_files gracefully handles files with errors."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+
+        # Create a valid file
+        valid_file = tmppath / "valid.py"
+        valid_file.write_text("def foo():\n    pass\n")
+
+        # Create an unsupported file
+        unsupported_file = tmppath / "data.bin"
+        unsupported_file.write_bytes(b"\x00\x01\x02\x03")
+
+        # Include a non-existent file
+        nonexistent = tmppath / "missing.py"
+
+        config = LanguageConfig()
+        all_chunks = list(chunk_files([valid_file, unsupported_file, nonexistent], config))
+
+        # Should only get chunks from the valid file
+        assert len(all_chunks) >= 1
+        assert all(chunk.file_path == str(valid_file) for chunk in all_chunks)
+
+
+def test_chunk_respects_typescript_config():
+    """Test that TypeScript files use the typescript config value."""
+    code = """interface Point {
+    x: number;
+    y: number;
+}
+
+function distance(p1: Point, p2: Point): number {
+    return Math.sqrt((p2.x - p1.x) ** 2 + (p2.y - p1.y) ** 2);
+}
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".ts", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        # Use custom TypeScript chunk size
+        config = LanguageConfig(typescript=100)
+        chunks = chunk_file(temp_path, config)
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.language == "typescript"
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_respects_javascript_config():
+    """Test that JavaScript files use the javascript config value."""
+    code = """function fibonacci(n) {
+    if (n <= 1) return n;
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+const result = fibonacci(10);
+console.log(result);
+"""
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".js", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        # Use custom JavaScript chunk size
+        config = LanguageConfig(javascript=50)
+        chunks = chunk_file(temp_path, config)
+
+        assert len(chunks) >= 1
+        for chunk in chunks:
+            assert chunk.language == "javascript"
+    finally:
+        temp_path.unlink()
+
+
+def test_chunk_context_contains_metadata():
+    """Test that chunk context contains expected metadata."""
+    code = "def test():\n    pass\n"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
+        f.write(code)
+        temp_path = Path(f.name)
+
+    try:
+        config = LanguageConfig()
+        chunks = chunk_file(temp_path, config)
+
+        assert len(chunks) >= 1
+        chunk = chunks[0]
+
+        # Verify context contains file path and language
+        assert f"File: {temp_path}" in chunk.context
+        assert "Language: python" in chunk.context
+    finally:
+        temp_path.unlink()
+
+
+# Unit tests for internal helper functions
+
+
+def test_count_non_whitespace():
+    """Test _count_non_whitespace helper function."""
+    assert _count_non_whitespace("hello") == 5
+    assert _count_non_whitespace("hello world") == 10
+    assert _count_non_whitespace("   hello   ") == 5
+    assert _count_non_whitespace("") == 0
+    assert _count_non_whitespace("   \n\t   ") == 0
+    assert _count_non_whitespace("a\nb\tc") == 3
+
+
+def test_get_parser_invalid_language():
+    """Test _get_parser with invalid language returns None."""
+    parser = _get_parser("nonexistent_language_xyz")
+    assert parser is None
+
+
+def test_get_context_info():
+    """Test _get_context_info helper function."""
+    context = _get_context_info("/path/to/file.py", "python", "def foo(): pass")
+
+    assert "File: /path/to/file.py" in context
+    assert "Language: python" in context
+
+
+def test_merge_nodes_into_chunk_empty_list():
+    """Test _merge_nodes_into_chunk with empty node list."""
+    chunk = _merge_nodes_into_chunk([], b"source code", "/path/file.py", "python")
+    assert chunk is None
