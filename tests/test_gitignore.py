@@ -509,3 +509,63 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_double_star_middle_matches_zero_or_more_dirs(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with /** / in middle (e.g., a/**/b) should match zero or more directory levels."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with /**/ middle pattern
+            (project_path / ".gitignore").write_text("a/**/b\n")
+
+            # Create files that match at various depths
+            # Zero directories between: a/b (should be ignored)
+            a_dir = project_path / "a"
+            a_dir.mkdir()
+            (a_dir / "b").write_text("zero levels")  # Should be ignored
+            (a_dir / "other.txt").write_text("not matched")  # Should NOT be ignored
+
+            # One directory between: a/x/b (should be ignored)
+            a_x = a_dir / "x"
+            a_x.mkdir()
+            (a_x / "b").write_text("one level")  # Should be ignored
+            (a_x / "other.txt").write_text("not matched")  # Should NOT be ignored
+
+            # Two directories between: a/x/y/b (should be ignored)
+            a_x_y = a_x / "y"
+            a_x_y.mkdir()
+            (a_x_y / "b").write_text("two levels")  # Should be ignored
+            (a_x_y / "other.txt").write_text("not matched")  # Should NOT be ignored
+
+            # Create files that should NOT match the pattern
+            (project_path / "b").write_text("root b")  # Should NOT be ignored (no 'a/' prefix)
+            (project_path / "main.py").write_text("print('main')")  # Should NOT be ignored
+
+            # Create another directory that doesn't match
+            other = project_path / "other"
+            other.mkdir()
+            (other / "b").write_text("other/b")  # Should NOT be ignored (no 'a/' prefix)
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Pattern a/**/b should match a/b, a/x/b, a/x/y/b but NOT b or other/b
+            expected = [
+                Path("a/other.txt"),  # NOT ignored
+                Path("a/x/other.txt"),  # NOT ignored
+                Path("a/x/y/other.txt"),  # NOT ignored
+                Path("b"),  # NOT ignored (no 'a/' prefix)
+                Path("main.py"),  # NOT ignored
+                Path("other/b"),  # NOT ignored (no 'a/' prefix)
+            ]
+
+            assert relative_files == expected
