@@ -796,3 +796,9 @@ class TestDefinitionExtraction:
         method_b = _make_node("function_definition", name="method_b")
         result = _extract_definition_names([cls, method_a, method_b], "python")
         assert result == ["class MyClass", "function method_a", "function method_b"]
+
+    def test_extract_typescript_function(self) -> None:
+        """TypeScript `function search() {}` produces `function search`."""
+        node = _make_node("function_declaration", name="search")
+        result = _extract_definition_names([node], "typescript")
+        assert result == ["function search"]
