@@ -51,6 +51,26 @@ class TestChunkResult:
         d = result.to_dict()
         assert d["preview"] == "def first_real_line(): pass\ndef second_real_line(): pass"
 
+    def test_result_preview_truncated_at_200_chars(self) -> None:
+        """Preview should truncate to 200 chars total with '...' when content exceeds limit."""
+        # Create a line that's 210 characters long (well over 200)
+        long_line = "x" * 210
+        result = ChunkResult(
+            content=long_line,
+            file_path="src/main.py",
+            language="python",
+            start_line=1,
+            end_line=1,
+            definitions="",
+            score=0.5,
+        )
+
+        d = result.to_dict()
+        preview = d["preview"]
+        assert len(preview) == 200
+        assert preview.endswith("...")
+        assert preview == "x" * 197 + "..."
+
 
 class TestSearcher:
     """Test suite for Searcher."""
