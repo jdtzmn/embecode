@@ -209,6 +209,7 @@ class Indexer:
 
                     # Store chunks and embeddings in database
                     self._store_chunks(file_path, chunks, embeddings)
+                    self.db.update_file_metadata(str(file_path), len(chunks))
 
                     indexed_count += 1
                     if indexed_count % 10 == 0:
