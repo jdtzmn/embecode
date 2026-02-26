@@ -11,7 +11,10 @@ from typing import Any
 from fastmcp import FastMCP
 
 from embecode.cache import CacheManager
-from embecode.config import EmbeCodeConfig
+from embecode.config import (  # noqa: F401 (EmbeCodeConfig needed for test mocking)
+    EmbeCodeConfig,
+    load_config,
+)
 from embecode.db import Database
 from embecode.embedder import Embedder
 from embecode.indexer import Indexer
@@ -41,7 +44,7 @@ class EmbeCodeServer:
             project_path: Path to the project root directory to index.
         """
         self.project_path = project_path.resolve()
-        self.config = EmbeCodeConfig.load(self.project_path)
+        self.config = load_config(self.project_path)
 
         # Initialize cache manager and get cache directory
         self.cache_manager = CacheManager()
@@ -54,7 +57,7 @@ class EmbeCodeServer:
         self.db.connect()
 
         # Initialize embedder and searcher
-        self.embedder = Embedder(model_name=self.config.embeddings.model)
+        self.embedder = Embedder(config=self.config.embeddings)
         self.searcher = Searcher(self.db, self.embedder)
 
         # Initialize indexer
@@ -81,7 +84,7 @@ class EmbeCodeServer:
                 self._start_watcher()
 
         # Update cache access time
-        self.cache_manager.update_access_time(self.project_path, self.cache_dir)
+        self.cache_manager.update_access_time(self.project_path)
 
     def _initial_index(self) -> None:
         """
@@ -91,7 +94,7 @@ class EmbeCodeServer:
         """
         try:
             logger.info("Starting full index...")
-            self.indexer.index_full(background=False)
+            self.indexer.start_full_index(background=False)
             logger.info("Full index complete")
 
             # Start watcher after indexing completes

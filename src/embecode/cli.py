@@ -93,9 +93,10 @@ def main() -> None:
     else:
         path = args.path
 
-    # Placeholder — server startup will be wired in once core modules exist.
-    print(f"embecode: indexing {path!r} — server not yet implemented", file=sys.stderr)
-    sys.exit(1)
+    # Start the MCP server
+    from embecode.server import run_server
+
+    run_server(Path(path).resolve())
 
 
 def _handle_cache_command(args: argparse.Namespace) -> None:

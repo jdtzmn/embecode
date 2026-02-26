@@ -79,7 +79,7 @@ def mock_searcher() -> Mock:
 class TestEmbeCodeServer:
     """Tests for EmbeCodeServer class."""
 
-    @patch("embecode.server.EmbeCodeConfig")
+    @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
     @patch("embecode.server.Embedder")
@@ -94,14 +94,14 @@ class TestEmbeCodeServer:
         mock_embedder_class: Mock,
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
-        mock_config_class: Mock,
+        mock_load_config: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
     ) -> None:
         """Test server initialization with empty index starts background indexing."""
         # Setup mocks
-        mock_config_class.load.return_value = mock_config
+        mock_load_config.return_value = mock_config
         mock_cache_manager = Mock()
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
@@ -116,7 +116,7 @@ class TestEmbeCodeServer:
 
         # Verify initialization
         assert server.project_path == temp_project.resolve()
-        mock_config_class.load.assert_called_once_with(temp_project.resolve())
+        mock_load_config.assert_called_once_with(temp_project.resolve())
         mock_cache_manager.get_cache_dir.assert_called_once()
         mock_db.connect.assert_called_once()
 
