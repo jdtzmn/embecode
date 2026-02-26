@@ -774,3 +774,10 @@ class TestDefinitionExtraction:
         node = _make_node("class_definition", name="Bar")
         result = _extract_definition_names([node], "python")
         assert result == ["class Bar"]
+
+    def test_extract_python_decorated_function(self) -> None:
+        """Python `@decorator\\ndef baz():` produces `function baz`."""
+        inner = _make_node("function_definition", name="baz")
+        node = _make_node("decorated_definition", children=[inner])
+        result = _extract_definition_names([node], "python")
+        assert result == ["function baz"]
