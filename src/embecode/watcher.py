@@ -199,7 +199,10 @@ class Watcher:
 
     def _should_process_file(self, file_path: Path) -> bool:
         """
-        Check if a file should be processed based on include/exclude rules.
+        Check if a file should be processed based on gitignore and include/exclude rules.
+
+        This delegates to the indexer's _should_index_file method to ensure
+        consistent filtering logic between initial indexing and incremental updates.
 
         Args:
             file_path: Absolute path to the file.
@@ -207,67 +210,7 @@ class Watcher:
         Returns:
             True if the file should be processed, False otherwise.
         """
-        try:
-            relative_path = file_path.relative_to(self.project_path)
-        except ValueError:
-            # File is not under project_path
-            return False
-
-        # Convert to string for pattern matching
-        path_str = str(relative_path)
-
-        # Check exclude patterns first
-        for pattern in self.config.index.exclude:
-            if self._matches_pattern(path_str, pattern):
-                return False
-
-        # Check include patterns
-        # If no include patterns specified, include everything (that's not excluded)
-        if not self.config.index.include:
-            return True
-
-        for pattern in self.config.index.include:
-            if self._matches_pattern(path_str, pattern):
-                return True
-
-        # If include patterns are specified but none matched, exclude
-        return False
-
-    def _matches_pattern(self, path_str: str, pattern: str) -> bool:
-        """
-        Check if a path matches a glob-style pattern.
-
-        Supports:
-        - Simple wildcards: *.py
-        - Directory wildcards: **/__pycache__/
-        - Prefix matching: src/ matches src/foo/bar.py
-
-        Args:
-            path_str: Path string (relative to project root).
-            pattern: Pattern string (e.g., "src/", "*.py", "**/__pycache__/").
-
-        Returns:
-            True if the path matches the pattern.
-        """
-        from pathlib import Path as PathlibPath
-
-        # If pattern contains wildcards, use glob matching
-        if "*" in pattern or "?" in pattern:
-            path_obj = PathlibPath(path_str)
-            try:
-                # Use match() for glob patterns
-                # For patterns ending with /, also try matching the directory and its contents
-                if pattern.endswith("/"):
-                    # Match both "pattern" and "pattern/*" (directory and its contents)
-                    return path_obj.match(pattern.rstrip("/")) or path_obj.match(pattern + "**")
-                return path_obj.match(pattern)
-            except ValueError:
-                # Invalid pattern, no match
-                return False
-
-        # If pattern ends with / (no wildcards), it's a directory prefix match
-        if pattern.endswith("/"):
-            return path_str.startswith(pattern) or path_str.startswith(pattern[:-1] + "/")
-
-        # Otherwise, exact match or prefix match
-        return path_str == pattern or path_str.startswith(pattern + "/")
+        # Delegate to indexer's _should_index_file for consistent filtering
+        # This ensures gitignore rules, config excludes, and config includes
+        # are all applied the same way during watching as during indexing
+        return self.indexer._should_index_file(file_path)
