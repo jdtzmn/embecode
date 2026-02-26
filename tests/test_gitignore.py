@@ -1313,3 +1313,51 @@ class TestGitignoreAndEmbeCodeConfig:
             ]
 
             assert relative_files == expected
+
+    def test_config_exclude_still_applies_to_non_gitignored_files(
+        self,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Config exclude patterns should still work on files not matched by .gitignore."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore that only excludes *.log files
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("*.log\n")
+
+            # Create test files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "debug.log").write_text("log content")  # Excluded by .gitignore
+            (project_path / "cache.tmp").write_text(
+                "temp data"
+            )  # NOT gitignored, but should be excluded by config
+            (project_path / "data.json").write_text('{"key": "value"}')
+
+            # Create config with exclude pattern for *.tmp
+            config = Mock(spec=EmbeCodeConfig)
+            config.index = IndexConfig(
+                include=[],  # Index everything by default
+                exclude=["*.tmp", ".git/"],  # Exclude .tmp files via config
+                languages=LanguageConfig(python=1500, default=1000),
+            )
+            config.embeddings = EmbeddingsConfig(model="test-model")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # cache.tmp should be excluded by config exclude pattern
+            # debug.log should be excluded by .gitignore
+            expected = [
+                Path("data.json"),
+                Path("main.py"),
+                # cache.tmp excluded by config
+                # debug.log excluded by .gitignore
+            ]
+
+            assert relative_files == expected
