@@ -55,6 +55,26 @@ class ChunkResult:
         }
 
 
+@dataclass
+class SearchTimings:
+    """Per-phase timing breakdown for a search query."""
+
+    embedding_ms: float = 0.0
+    vector_search_ms: float = 0.0
+    bm25_search_ms: float = 0.0
+    fusion_ms: float = 0.0
+    total_ms: float = 0.0
+
+    def to_dict(self) -> dict[str, float]:
+        return {
+            "embedding_ms": round(self.embedding_ms, 2),
+            "vector_search_ms": round(self.vector_search_ms, 2),
+            "bm25_search_ms": round(self.bm25_search_ms, 2),
+            "fusion_ms": round(self.fusion_ms, 2),
+            "total_ms": round(self.total_ms, 2),
+        }
+
+
 class Searcher:
     """
     Hybrid search engine combining BM25 (keyword) and dense vector (semantic) search.
