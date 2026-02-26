@@ -931,3 +931,40 @@ class TestGitignoreNegation:
             ]
 
             assert relative_files == expected
+
+    def test_escaped_exclamation_mark(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern \\!readme should match a file literally named !readme (not a negation)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with escaped exclamation mark pattern
+            # This should match a file literally named "!readme", not act as a negation
+            (project_path / ".gitignore").write_text("\\!readme\n")
+
+            # Create a file literally named "!readme" (should be excluded)
+            (project_path / "!readme").write_text("this file has an exclamation mark in the name")
+
+            # Create other files (should be indexed)
+            (project_path / "readme.txt").write_text("normal readme")
+            (project_path / "main.py").write_text("print('hello')")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # The file named "!readme" should be excluded (matched by escaped pattern)
+            # Other files should be included
+            expected = [
+                Path("main.py"),
+                Path("readme.txt"),
+            ]
+
+            assert relative_files == expected
