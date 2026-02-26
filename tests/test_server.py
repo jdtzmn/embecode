@@ -451,6 +451,132 @@ class TestEmbeCodeServer:
         # Verify path was passed to searcher
         mock_searcher.search.assert_called_once_with("test", mode="hybrid", top_k=10, path="src/")
 
+    @patch("embecode.server.EmbeCodeConfig")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_search_code_returns_concise_results(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_config_class: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+        mock_searcher: Mock,
+    ) -> None:
+        """Test search_code returns concise format with all expected keys and no content field."""
+        # Setup mocks
+        mock_config_class.load.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        mock_db.get_index_stats.return_value = {"total_chunks": 100}
+        mock_db_class.return_value = mock_db
+
+        # Setup searcher mock with a result that has content
+        result = ChunkResult(
+            content="def hello():\n    print('hello')",
+            file_path="main.py",
+            language="python",
+            start_line=1,
+            end_line=2,
+            definitions="function hello",
+            score=0.95,
+        )
+        mock_searcher.search.return_value = [result]
+        mock_searcher_class.return_value = mock_searcher
+
+        # Initialize server and search
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("hello function")
+
+        # Verify all expected keys are present
+        expected_keys = {
+            "file_path",
+            "language",
+            "start_line",
+            "end_line",
+            "definitions",
+            "preview",
+            "score",
+        }
+        assert set(results[0].keys()) == expected_keys
+
+        # Verify content field is excluded (concise format)
+        assert "content" not in results[0]
+
+    @patch("embecode.server.EmbeCodeConfig")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_search_code_default_top_k_is_10(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_config_class: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+        mock_searcher: Mock,
+    ) -> None:
+        """Test search_code defaults to top_k=10 and can return up to 10 results."""
+        # Setup mocks
+        mock_config_class.load.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        mock_db.get_index_stats.return_value = {"total_chunks": 100}
+        mock_db_class.return_value = mock_db
+
+        # Create 10 mock results
+        mock_results = [
+            ChunkResult(
+                content=f"def func_{i}():\n    pass",
+                file_path=f"file_{i}.py",
+                language="python",
+                start_line=1,
+                end_line=2,
+                definitions=f"function func_{i}",
+                score=1.0 - i * 0.1,
+            )
+            for i in range(10)
+        ]
+        mock_searcher.search.return_value = mock_results
+        mock_searcher_class.return_value = mock_searcher
+
+        # Initialize server and search without explicit top_k
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("test query")
+
+        # Verify searcher was called with top_k=10
+        mock_searcher.search.assert_called_once_with(
+            "test query", mode="hybrid", top_k=10, path=None
+        )
+
+        # Verify all 10 results are returned
+        assert len(results) == 10
+
 
 class TestCatchUpStartup:
     """Tests for catch-up indexing startup logic and embedding model detection."""
@@ -884,6 +1010,24 @@ class TestMCPToolFunctions:
         assert result["embedding_model"] == "test-model"
         assert result["is_indexing"] is False
         mock_server.get_index_status.assert_called_once()
+
+    @patch("embecode.server.get_server")
+    def test_search_code_default_top_k_is_10(self, mock_get_server: Mock) -> None:
+        """Test search_code tool defaults to top_k=10 when not explicitly passed."""
+        from embecode.server import search_code
+
+        # Setup mock server
+        mock_server = Mock()
+        mock_server.search_code.return_value = []
+        mock_get_server.return_value = mock_server
+
+        # Call tool without specifying top_k
+        search_code("test query")
+
+        # Verify top_k defaults to 10
+        mock_server.search_code.assert_called_once_with(
+            "test query", mode="hybrid", top_k=10, path=None
+        )
 
 
 class TestRunServer:
