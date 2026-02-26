@@ -13,18 +13,15 @@ from __future__ import annotations
 import os
 import random
 import string
-import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from embecode.config import load_config
 from embecode.db import Database
 from embecode.indexer import Indexer
-
 
 # ============================================================================
 # Mock Embedder
@@ -112,7 +109,7 @@ def generate_python_file_content(num_lines: int) -> str:
                 f"        # Generated method with unique content: {random.randint(1000, 9999)}"
             )
             lines.append(f"        result = {{'status': 'ok', 'data': {param_name}}}")
-            lines.append(f"        return result")
+            lines.append("        return result")
             lines.append("")
 
     # Generate standalone functions
@@ -122,10 +119,10 @@ def generate_python_file_content(num_lines: int) -> str:
         arg1 = random_identifier("arg_")
         arg2 = random_identifier("val_")
         lines.append(f"def {func_name}({arg1}: str, {arg2}: int = 0) -> Optional[str]:")
-        lines.append(f'    """Generated function with unique content."""')
+        lines.append('    """Generated function with unique content."""')
         lines.append(f"    # Unique identifier: {random.randint(10000, 99999)}")
         lines.append(f"    if not {arg1}:")
-        lines.append(f"        return None")
+        lines.append("        return None")
         lines.append(f"    return f'{{{arg1}}}_{{{arg2}}}'")
         lines.append("")
 
@@ -177,8 +174,8 @@ def generate_typescript_file_content(num_lines: int) -> str:
     # Generate type aliases
     type_name = random_identifier("Type").capitalize()
     lines.append(f"type {type_name} = {{")
-    lines.append(f"  id: number;")
-    lines.append(f"  name: string;")
+    lines.append("  id: number;")
+    lines.append("  name: string;")
     lines.append(f"  // Unique identifier: {random.randint(1000, 9999)}")
     lines.append("};")
     lines.append("")
@@ -201,7 +198,7 @@ def generate_typescript_file_content(num_lines: int) -> str:
         lines.append(f"  public {method_name}({param_name}: string): any {{")
         lines.append(f"    // Process {param_name} - unique: {random.randint(1000, 9999)}")
         lines.append(f"    const result = {{ status: 'ok', data: {param_name} }};")
-        lines.append(f"    return result;")
+        lines.append("    return result;")
         lines.append("  }")
         lines.append("")
 
@@ -269,7 +266,7 @@ def generate_javascript_file_content(num_lines: int) -> str:
         lines.append(f"  {method_name}({param_name}) {{")
         lines.append(f"    // Process {param_name} - unique: {random.randint(1000, 9999)}")
         lines.append(f"    const result = {{ status: 'ok', data: {param_name} }};")
-        lines.append(f"    return result;")
+        lines.append("    return result;")
         lines.append("  }")
         lines.append("")
 
@@ -285,8 +282,8 @@ def generate_javascript_file_content(num_lines: int) -> str:
         lines.append(f"function {func_name}({arg1}, {arg2} = 0) {{")
         lines.append(f"  // Unique function identifier: {random.randint(10000, 99999)}")
         lines.append(f"  if (!{arg1}) {{")
-        lines.append(f"    return null;")
-        lines.append(f"  }}")
+        lines.append("    return null;")
+        lines.append("  }")
         lines.append(f"  return `${{{arg1}}}_${{{arg2}}}`;")
         lines.append("}")
         lines.append("")
@@ -295,7 +292,7 @@ def generate_javascript_file_content(num_lines: int) -> str:
     arrow_func_name = random_identifier("handler_")
     lines.append(f"const {arrow_func_name} = (input) => {{")
     lines.append(f"  // Arrow function with unique content: {random.randint(1000, 9999)}")
-    lines.append(f"  return {{ processed: input }};")
+    lines.append("  return { processed: input };")
     lines.append("};")
     lines.append("")
 
@@ -508,11 +505,11 @@ def print_diagnostics(
     print("\n" + "=" * 70)
     print("MEMORY LEAK TEST DIAGNOSTICS")
     print("=" * 70)
-    print(f"\nFile Statistics:")
+    print("\nFile Statistics:")
     print(f"  Total files generated:  {files_generated:6,}")
     print(f"  Total files indexed:    {files_indexed:6,}")
     print(f"  Total chunks stored:    {chunks_stored:6,}")
-    print(f"\nMemory Usage (MB):")
+    print("\nMemory Usage (MB):")
     print(f"  Baseline (before):      {baseline_mb:8.2f} MB")
     if peak_at_file_index is not None:
         print(
@@ -523,7 +520,7 @@ def print_diagnostics(
     print(f"  Final (after):          {final_mb:8.2f} MB")
     print(f"  Delta (final - base):   {final_mb - baseline_mb:8.2f} MB")
     print(f"  Peak delta:             {peak_mb - baseline_mb:8.2f} MB")
-    print(f"\nTiming:")
+    print("\nTiming:")
     print(f"  Indexing duration:      {duration_sec:8.2f} seconds")
     if duration_sec > 0:
         print(f"  Files per second:       {files_indexed / duration_sec:8.2f}")

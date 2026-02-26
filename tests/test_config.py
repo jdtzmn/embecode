@@ -5,8 +5,6 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from embecode.config import (
     EmbeCodeConfig,
     get_chunk_size_for_language,
