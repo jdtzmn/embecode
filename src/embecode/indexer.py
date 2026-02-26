@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +40,8 @@ class IndexStatus:
         is_indexing: bool,
         current_file: str | None = None,
         progress: float | None = None,
+        indexing_type: str | None = None,
+        files_to_process: int | None = None,
     ) -> None:
         """
         Initialize index status.
@@ -51,6 +54,8 @@ class IndexStatus:
             is_indexing: Whether indexing is currently in progress.
             current_file: Current file being indexed (if is_indexing=True).
             progress: Progress as a fraction 0-1 (if is_indexing=True).
+            indexing_type: Type of indexing in progress ("full", "catchup", or None).
+            files_to_process: Number of files to process during indexing (or None).
         """
         self.files_indexed = files_indexed
         self.total_chunks = total_chunks
@@ -59,6 +64,8 @@ class IndexStatus:
         self.is_indexing = is_indexing
         self.current_file = current_file
         self.progress = progress
+        self.indexing_type = indexing_type
+        self.files_to_process = files_to_process
 
     def to_dict(self) -> dict[str, Any]:
         """Convert status to dictionary for API responses."""
@@ -70,6 +77,8 @@ class IndexStatus:
             "is_indexing": self.is_indexing,
             "current_file": self.current_file,
             "progress": self.progress,
+            "indexing_type": self.indexing_type,
+            "files_to_process": self.files_to_process,
         }
 
 
@@ -105,6 +114,8 @@ class Indexer:
         self._is_indexing = False
         self._current_file: str | None = None
         self._progress: float | None = None
+        self._indexing_type: str | None = None
+        self._files_to_process: int | None = None
         self._lock = threading.Lock()
         # Cache for .gitignore PathSpec objects keyed by directory path
         self._gitignore_cache: dict[Path, pathspec.PathSpec | None] = {}
@@ -126,6 +137,8 @@ class Indexer:
             is_indexing = self._is_indexing
             current_file = self._current_file
             progress = self._progress
+            indexing_type = self._indexing_type
+            files_to_process = self._files_to_process
 
         # Get stats from database
         stats = self.db.get_index_stats()
@@ -138,6 +151,8 @@ class Indexer:
             is_indexing=is_indexing,
             current_file=current_file,
             progress=progress,
+            indexing_type=indexing_type,
+            files_to_process=files_to_process,
         )
 
     def start_full_index(self, background: bool = True) -> None:
@@ -180,6 +195,10 @@ class Indexer:
             files = self._collect_files()
             total_files = len(files)
             logger.info("Found %d files to index", total_files)
+
+            with self._lock:
+                self._indexing_type = "full"
+                self._files_to_process = total_files
 
             # Import chunker here to avoid circular imports
             from embecode.chunker import chunk_file
@@ -230,6 +249,127 @@ class Indexer:
                 self._is_indexing = False
                 self._current_file = None
                 self._progress = None
+                self._indexing_type = None
+                self._files_to_process = None
+
+    def start_catchup_index(self, background: bool = True) -> None:
+        """
+        Start a catch-up index of the codebase.
+
+        Detects missing, modified, and stale files and indexes only the gaps.
+
+        Args:
+            background: If True, run in background thread. If False, block until complete.
+
+        Raises:
+            IndexingInProgressError: If indexing is already in progress.
+        """
+        with self._lock:
+            if self._is_indexing:
+                raise IndexingInProgressError("Indexing is already in progress")
+
+        if background:
+            self._indexing_thread = threading.Thread(
+                target=self._run_catchup_index,
+                daemon=True,
+            )
+            self._indexing_thread.start()
+        else:
+            self._run_catchup_index()
+
+    def _run_catchup_index(self) -> None:
+        """Run catch-up indexing to fill gaps in the index."""
+        try:
+            # Step 1: Collect files on disk
+            files_on_disk = self._collect_files()
+            disk_paths = {str(f) for f in files_on_disk}
+            disk_path_map = {str(f): f for f in files_on_disk}
+
+            # Step 2: Get indexed files from DB
+            indexed_files = self.db.get_indexed_files_with_timestamps()
+            indexed_paths = set(indexed_files.keys())
+
+            # Step 3: Classify files
+            missing_paths = disk_paths - indexed_paths
+            stale_paths = indexed_paths - disk_paths
+
+            # Check for modified files (mtime > last_indexed)
+            modified_paths: set[str] = set()
+            for path_str in disk_paths & indexed_paths:
+                try:
+                    file_mtime = datetime.fromtimestamp(os.path.getmtime(path_str), tz=UTC)
+                    last_indexed = indexed_files[path_str]
+                    # Ensure last_indexed is timezone-aware for comparison
+                    if last_indexed.tzinfo is None:
+                        last_indexed = last_indexed.replace(tzinfo=UTC)
+                    if file_mtime > last_indexed:
+                        modified_paths.add(path_str)
+                except OSError:
+                    # File disappeared between collect and check
+                    continue
+
+            total_work = len(missing_paths) + len(modified_paths) + len(stale_paths)
+
+            # Step 4: If no work needed, return without setting _is_indexing
+            if total_work == 0:
+                logger.info("Catch-up indexing: index is up to date, nothing to do")
+                return
+
+            # Step 5: Work exists - set indexing state
+            with self._lock:
+                self._is_indexing = True
+                self._indexing_type = "catchup"
+                self._files_to_process = len(missing_paths) + len(modified_paths)
+
+            logger.info(
+                "Catch-up indexing: %d missing, %d modified, %d stale",
+                len(missing_paths),
+                len(modified_paths),
+                len(stale_paths),
+            )
+
+            # Step 5d: Delete stale files from DB
+            for stale_path in stale_paths:
+                try:
+                    self.delete_file(Path(stale_path))
+                except Exception as e:
+                    logger.warning("Failed to remove stale file %s: %s", stale_path, e)
+
+            # Step 5e & 5f: Index missing and modified files
+            files_to_index = list(missing_paths) + list(modified_paths)
+            total_to_index = len(files_to_index)
+            indexed_count = 0
+
+            for i, path_str in enumerate(files_to_index):
+                with self._lock:
+                    self._current_file = path_str
+                    self._progress = i / total_to_index if total_to_index > 0 else 0.0
+
+                try:
+                    file_path = disk_path_map.get(path_str, Path(path_str))
+                    self.update_file(file_path)
+                    indexed_count += 1
+                except Exception as e:
+                    logger.warning("Failed to index %s: %s", path_str, e)
+                    continue
+
+            # Set final progress to 1.0
+            with self._lock:
+                self._progress = 1.0
+
+            logger.info("Catch-up index complete: %d files processed", indexed_count)
+
+        except Exception as e:
+            logger.error("Catch-up index failed: %s", e)
+            raise
+
+        finally:
+            with self._lock:
+                self._is_indexing = False
+                self._current_file = None
+                self._progress = None
+                self._indexing_type = None
+                self._files_to_process = None
 
     def update_file(self, file_path: Path) -> None:
         """
