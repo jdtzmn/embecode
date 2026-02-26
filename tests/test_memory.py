@@ -425,6 +425,28 @@ def generate_synthetic_codebase(base_path: Path) -> None:
 # ============================================================================
 
 
+class MemorySample:
+    """A single memory measurement with associated metadata.
+
+    Attributes:
+        timestamp: When the sample was taken (seconds since epoch)
+        rss_mb: Resident Set Size in megabytes
+        files_indexed: Approximate number of files indexed at sample time (if known)
+    """
+
+    def __init__(self, timestamp: float, rss_mb: float, files_indexed: int | None = None):
+        """Initialize memory sample.
+
+        Args:
+            timestamp: Time when sample was taken (seconds since epoch)
+            rss_mb: Memory usage in MB
+            files_indexed: Number of files indexed at this point (if determinable)
+        """
+        self.timestamp = timestamp
+        self.rss_mb = rss_mb
+        self.files_indexed = files_indexed
+
+
 def get_memory_usage_mb() -> float:
     """Get current process RSS (Resident Set Size) in megabytes.
 
@@ -436,6 +458,23 @@ def get_memory_usage_mb() -> float:
     process = psutil.Process(os.getpid())
     # RSS (Resident Set Size) in bytes, convert to MB
     return process.memory_info().rss / (1024 * 1024)
+
+
+def find_peak_memory_sample(samples: list[MemorySample]) -> tuple[float, int | None]:
+    """Find the peak memory sample and return its RSS and file index.
+
+    Args:
+        samples: List of memory samples collected during monitoring
+
+    Returns:
+        Tuple of (peak_rss_mb, files_indexed_at_peak)
+        files_indexed_at_peak will be None if not determinable
+    """
+    if not samples:
+        return 0.0, None
+
+    peak_sample = max(samples, key=lambda s: s.rss_mb)
+    return peak_sample.rss_mb, peak_sample.files_indexed
 
 
 # ============================================================================
@@ -451,6 +490,7 @@ def print_diagnostics(
     peak_mb: float,
     final_mb: float,
     duration_sec: float,
+    peak_at_file_index: int | None = None,
 ) -> None:
     """Print comprehensive diagnostic information from the memory test.
 
@@ -462,6 +502,7 @@ def print_diagnostics(
         peak_mb: Peak memory usage during indexing (MB)
         final_mb: Memory usage after indexing completed (MB)
         duration_sec: Wall-clock duration of indexing in seconds
+        peak_at_file_index: Approximate file index when peak memory was observed (if determinable)
     """
     print("\n" + "=" * 70)
     print("MEMORY LEAK TEST DIAGNOSTICS")
@@ -472,7 +513,12 @@ def print_diagnostics(
     print(f"  Total chunks stored:    {chunks_stored:6,}")
     print(f"\nMemory Usage (MB):")
     print(f"  Baseline (before):      {baseline_mb:8.2f} MB")
-    print(f"  Peak (during):          {peak_mb:8.2f} MB")
+    if peak_at_file_index is not None:
+        print(
+            f"  Peak (during):          {peak_mb:8.2f} MB (at approx. file #{peak_at_file_index})"
+        )
+    else:
+        print(f"  Peak (during):          {peak_mb:8.2f} MB")
     print(f"  Final (after):          {final_mb:8.2f} MB")
     print(f"  Delta (final - base):   {final_mb - baseline_mb:8.2f} MB")
     print(f"  Peak delta:             {peak_mb - baseline_mb:8.2f} MB")
@@ -511,9 +557,10 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
     # - Generate synthetic codebase
     # - Set up Database, Indexer, and config
     # - Capture baseline memory
-    # - Start background peak memory monitoring
+    # - Start background peak memory monitoring (storing MemorySample objects)
     # - Run full index (with timing)
     # - Stop peak monitoring and capture final memory
+    # - Use find_peak_memory_sample() to extract peak and file index
 
     # Placeholder values for diagnostic output (will be replaced with real values)
     files_generated = 0
@@ -522,6 +569,7 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
     baseline_mb = 0.0
     peak_mb = 0.0
     final_mb = 0.0
+    peak_at_file_index: int | None = None
 
     # Track wall-clock duration of indexing
     start_time = time.perf_counter()
@@ -538,6 +586,7 @@ def test_memory_leak_during_full_index(tmp_path: Path) -> None:
         peak_mb=peak_mb,
         final_mb=final_mb,
         duration_sec=duration_sec,
+        peak_at_file_index=peak_at_file_index,
     )
 
     # TODO: Assert memory constraints
