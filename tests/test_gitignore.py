@@ -1413,3 +1413,50 @@ class TestGitignoreAndEmbeCodeConfig:
             ]
 
             assert relative_files == expected
+
+    def test_both_gitignore_and_config_exclude_file(
+        self,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """File matched by both gitignore and config exclude should be excluded without conflict."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore that excludes *.log files
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("*.log\n")
+
+            # Create test files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "debug.log").write_text(
+                "log content"
+            )  # Matched by BOTH .gitignore and config exclude
+            (project_path / "data.json").write_text('{"key": "value"}')
+
+            # Create config that also excludes *.log files
+            # This creates overlap with the .gitignore rule
+            config = Mock(spec=EmbeCodeConfig)
+            config.index = IndexConfig(
+                include=[],  # Index everything by default
+                exclude=["*.log", ".git/"],  # Also exclude *.log files via config
+                languages=LanguageConfig(python=1500, default=1000),
+            )
+            config.embeddings = EmbeddingsConfig(model="test-model")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # debug.log should be excluded (no conflict, no error)
+            # It's caught by gitignore first, so config exclude is never evaluated
+            expected = [
+                Path("data.json"),
+                Path("main.py"),
+                # debug.log excluded by both .gitignore and config (no conflict)
+            ]
+
+            assert relative_files == expected
