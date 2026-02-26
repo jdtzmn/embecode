@@ -222,6 +222,7 @@ class Database:
                 - content: Chunk content
                 - context: Contextual metadata for embedding
                 - hash: SHA1 hash of the chunk content
+                - definitions: Comma-separated definition names
                 - embedding: Vector embedding (list of floats)
         """
         self.connect()
@@ -249,6 +250,7 @@ class Database:
                     record["content"],
                     record.get("context", ""),
                     record["hash"],
+                    record.get("definitions", ""),
                     now,
                 )
             )
@@ -275,11 +277,12 @@ class Database:
         self._conn.executemany(
             """
             INSERT INTO chunks (id, file_path, language, start_line, end_line,
-                              content, context, hash, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                              content, context, hash, definitions, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id) DO UPDATE SET
                 content = excluded.content,
                 hash = excluded.hash,
+                definitions = excluded.definitions,
                 created_at = excluded.created_at
             """,
             chunk_rows,
