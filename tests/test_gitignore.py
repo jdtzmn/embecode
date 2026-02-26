@@ -1895,8 +1895,51 @@ class TestGitignoreEdgeCases:
         mock_embedder: Mock,
     ) -> None:
         """Backslash should escape special characters like * to match literally."""
-        # TODO: Implement test for backslash escaping
-        pass
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with escaped special characters
+            # Pattern "\*.txt" should match a file literally named "*.txt", NOT all .txt files
+            # Pattern "\[test\].py" should match a file literally named "[test].py", NOT a character range
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("\\*.txt\n\\[test\\].py\n")
+
+            # Create test files
+            (project_path / "*.txt").write_text(
+                "literal asterisk"
+            )  # Should be excluded (matches "\*.txt")
+            (project_path / "foo.txt").write_text(
+                "normal file"
+            )  # Should NOT be excluded (doesn't match "\*.txt")
+            (project_path / "bar.txt").write_text(
+                "normal file"
+            )  # Should NOT be excluded (doesn't match "\*.txt")
+            (project_path / "[test].py").write_text(
+                "literal brackets"
+            )  # Should be excluded (matches "\[test\].py")
+            (project_path / "a.py").write_text(
+                "normal file"
+            )  # Should NOT be excluded (doesn't match "\[test\].py")
+            (project_path / "main.py").write_text("print('hello')")  # Should NOT be excluded
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # "*.txt" (literal) should be excluded (matches "\*.txt")
+            # "[test].py" (literal) should be excluded (matches "\[test\].py")
+            # All other files should NOT be excluded
+            expected = [
+                Path("a.py"),  # NOT ignored
+                Path("bar.txt"),  # NOT ignored (doesn't match literal "\*.txt")
+                Path("foo.txt"),  # NOT ignored (doesn't match literal "\*.txt")
+                Path("main.py"),  # NOT ignored
+            ]
+
+            assert relative_files == expected
 
     def test_gitignore_caching_across_collect_files(
         self,
