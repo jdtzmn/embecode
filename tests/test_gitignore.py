@@ -968,3 +968,84 @@ class TestGitignoreNegation:
             ]
 
             assert relative_files == expected
+
+
+class TestGitignoreNesting:
+    """Test suite for nested .gitignore files with precedence rules."""
+
+    @pytest.fixture
+    def mock_config(self) -> EmbeCodeConfig:
+        """Create a mock config with empty include (index everything)."""
+        config = Mock(spec=EmbeCodeConfig)
+        config.index = IndexConfig(
+            include=[],  # Empty = index everything
+            exclude=["node_modules/", ".git/"],
+            languages=LanguageConfig(python=1500, default=1000),
+        )
+        config.embeddings = EmbeddingsConfig(model="test-model")
+        return config
+
+    @pytest.fixture
+    def mock_db(self) -> Mock:
+        """Create a mock database."""
+        db = Mock()
+        db.get_index_stats.return_value = {
+            "files_indexed": 0,
+            "total_chunks": 0,
+            "last_updated": None,
+        }
+        return db
+
+    @pytest.fixture
+    def mock_embedder(self) -> Mock:
+        """Create a mock embedder."""
+        return Mock()
+
+    def test_child_gitignore_overrides_parent(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Child .gitignore can override parent rules with negation patterns."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create root .gitignore that excludes all .py files
+            root_gitignore = project_path / ".gitignore"
+            root_gitignore.write_text("*.py\n")
+
+            # Create subdirectory with its own .gitignore that re-includes main.py
+            sub = project_path / "sub"
+            sub.mkdir()
+            sub_gitignore = sub / ".gitignore"
+            sub_gitignore.write_text("!main.py\n")
+
+            # Create test files in root directory (all .py files should be excluded)
+            (project_path / "root_main.py").write_text("print('root main')")
+            (project_path / "other.py").write_text("print('root other')")
+            (project_path / "readme.md").write_text("# Readme")
+
+            # Create test files in subdirectory
+            (sub / "main.py").write_text(
+                "print('sub main')"
+            )  # Should be re-included by sub/.gitignore
+            (sub / "other.py").write_text("print('sub other')")  # Should still be excluded
+            (sub / "config.json").write_text('{"key": "value"}')
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # sub/main.py should be re-included by sub/.gitignore
+            # All other .py files should be excluded
+            expected = [
+                Path("readme.md"),  # NOT ignored
+                Path("sub/config.json"),  # NOT ignored
+                Path("sub/main.py"),  # Re-included by sub/.gitignore !main.py
+            ]
+
+            assert relative_files == expected
