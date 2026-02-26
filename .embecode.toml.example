@@ -1,0 +1,111 @@
+# embecode Configuration Example
+#
+# Copy this file to `.embecode.toml` in your project root and customize as needed.
+# All settings are optional - sensible defaults are provided for everything.
+#
+# Config resolution order (highest to lowest priority):
+#   1. CLI args (--path, --exclude)
+#   2. .embecode.toml in project root
+#   3. ~/.config/embecode/config.toml (user-global defaults)
+#   4. Built-in defaults
+
+# ============================================================================
+# Index Configuration
+# ============================================================================
+
+[index]
+# Directories and files to include in the index (relative to project root)
+# Default: ["."] (index entire project)
+include = [
+    "src/",
+    "lib/",
+    "tests/",
+]
+
+# Patterns to exclude from indexing (glob patterns supported)
+# Default: Common build/dependency directories
+exclude = [
+    "node_modules/",
+    ".venv/",
+    "venv/",
+    "__pycache__/",
+    ".git/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    "dist/",
+    "build/",
+    "*.min.js",
+    "*.pyc",
+    "*.pyo",
+    "*.so",
+    "*.dylib",
+]
+
+# Per-language chunk size limits (measured in non-whitespace characters)
+# These defaults balance context window usage with chunk coherence.
+[index.languages]
+python = 1500        # Python tends to be more verbose
+typescript = 1200    # TypeScript/JavaScript middle ground
+javascript = 1200    # Same as TypeScript
+default = 1000       # All other languages
+
+# ============================================================================
+# Embedding Configuration
+# ============================================================================
+
+[embeddings]
+# Embedding model to use
+# Options:
+#   - "nomic-embed-text-v1.5" → default, best quality/speed balance, 8192-token context
+#   - "BAAI/bge-base-en-v1.5" → faster, smaller model
+#   - "all-MiniLM-L6-v2" → lightweight alternative
+#   - "voyage-code-3" → requires VOYAGE_API_KEY env var (best quality)
+#   - "text-embedding-3-large" → requires OPENAI_API_KEY env var
+model = "nomic-embed-text-v1.5"
+
+# Optional: Environment variable name for API key (if using external embedding service)
+# api_key_env = "VOYAGE_API_KEY"
+
+# ============================================================================
+# Search Configuration
+# ============================================================================
+
+[search]
+# Default search mode if not specified in tool call
+# Options: "hybrid", "semantic", "keyword"
+# - "hybrid": BM25 + vector search with RRF fusion (recommended)
+# - "semantic": Dense vector search only (best for natural language queries)
+# - "keyword": BM25 lexical search only (best for exact identifier matches)
+default_mode = "hybrid"
+
+# Default number of results to return
+# Balances context window usage vs. providing enough relevant chunks
+top_k = 10
+
+# ============================================================================
+# Daemon / Watcher Configuration
+# ============================================================================
+
+[daemon]
+# Milliseconds to wait before processing file change events
+# Groups rapid successive changes (e.g., during git operations) into one update
+debounce_ms = 500
+
+# Automatically start file watcher after initial indexing completes
+# Set to false if you prefer manual re-indexing only
+auto_watch = true
+
+# ============================================================================
+# Cache Configuration
+# ============================================================================
+
+[cache]
+# Maximum total cache size across all projects (in bytes)
+# Default: 2GB (2147483648 bytes)
+# When exceeded, least recently used projects are evicted automatically
+max_size_bytes = 2147483648
+
+# Alternatively, use human-readable units:
+# max_size = "2GB"
+# max_size = "500MB"
+# max_size = "5000MB"
