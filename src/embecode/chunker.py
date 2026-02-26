@@ -24,6 +24,7 @@ class Chunk:
     end_line: int
     context: str  # Enrichment metadata (file path, scope, imports, etc.)
     hash: str  # SHA1 hash of content for incremental indexing
+    definitions: str = ""  # Comma-separated definition names (e.g. "function foo, class Bar")
 
     @classmethod
     def create(
@@ -34,6 +35,7 @@ class Chunk:
         start_line: int,
         end_line: int,
         context: str,
+        definitions: str = "",
     ) -> Chunk:
         """Create a chunk with computed hash."""
         content_hash = hashlib.sha1(content.encode("utf-8")).hexdigest()
@@ -45,6 +47,7 @@ class Chunk:
             end_line=end_line,
             context=context,
             hash=content_hash,
+            definitions=definitions,
         )
 
 
@@ -289,6 +292,10 @@ def _merge_nodes_into_chunk(
     start_line = start_node.start_point[0] + 1
     end_line = end_node.end_point[0] + 1
 
+    # Extract definition names from AST nodes
+    defs = _extract_definition_names(nodes, language)
+    definitions = ", ".join(defs)
+
     context = _get_context_info(file_path, language, content)
 
     return Chunk.create(
@@ -298,6 +305,7 @@ def _merge_nodes_into_chunk(
         start_line=start_line,
         end_line=end_line,
         context=context,
+        definitions=definitions,
     )
 
 
