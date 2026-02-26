@@ -354,3 +354,182 @@ class TestSearcher:
         # Verify default top_k=5 (but fetches 15 for hybrid)
         assert mock_db.vector_search.call_args[1]["top_k"] == 15
         assert mock_db.bm25_search.call_args[1]["top_k"] == 15
+
+    def test_search_hybrid_all_duplicates(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """Should handle case when semantic and keyword return identical results."""
+        # Both searches return the same results
+        same_results = [
+            {
+                "content": "def foo(): pass",
+                "file_path": "src/main.py",
+                "language": "python",
+                "start_line": 10,
+                "end_line": 15,
+                "context": "module: main",
+                "score": 0.9,
+            },
+            {
+                "content": "def bar(): pass",
+                "file_path": "src/utils.py",
+                "language": "python",
+                "start_line": 20,
+                "end_line": 25,
+                "context": "module: utils",
+                "score": 0.8,
+            },
+        ]
+        mock_db.vector_search.return_value = same_results
+        mock_db.bm25_search.return_value = same_results
+
+        results = searcher.search("query", mode="hybrid", top_k=2)
+
+        # Should deduplicate and boost scores via RRF
+        # Each result appears in both rank 1 and rank 2
+        # foo: RRF = 1/(60+1) + 1/(60+1) = 2 * 1/61 = 0.0328
+        # bar: RRF = 1/(60+2) + 1/(60+2) = 2 * 1/62 = 0.0323
+        assert len(results) == 2
+        assert results[0].file_path == "src/main.py"
+        assert results[1].file_path == "src/utils.py"
+        assert results[0].score == pytest.approx(2 / 61, abs=0.0001)
+        assert results[1].score == pytest.approx(2 / 62, abs=0.0001)
+
+    def test_search_hybrid_different_chunks_same_location(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """Should use chunk ID (file_path:start_line) to identify duplicates."""
+        # Same location (file_path:start_line) but different content/context
+        mock_db.vector_search.return_value = [
+            {
+                "content": "def foo(): pass",
+                "file_path": "src/main.py",
+                "language": "python",
+                "start_line": 10,
+                "end_line": 15,
+                "context": "module: main\ndefines: foo",
+                "score": 0.95,
+            },
+        ]
+        mock_db.bm25_search.return_value = [
+            {
+                "content": "def foo(): return True",  # Different content
+                "file_path": "src/main.py",
+                "language": "python",
+                "start_line": 10,  # Same start line
+                "end_line": 15,
+                "context": "alternative context",  # Different context
+                "score": 12.5,
+            },
+        ]
+
+        results = searcher.search("query", mode="hybrid", top_k=1)
+
+        # Should treat as duplicate and use semantic version (added first)
+        assert len(results) == 1
+        assert results[0].content == "def foo(): pass"  # From semantic
+        assert results[0].context == "module: main\ndefines: foo"  # From semantic
+        # RRF score combines both: 1/(60+1) + 1/(60+1) = 2/61
+        assert results[0].score == pytest.approx(2 / 61, abs=0.0001)
+
+    def test_search_hybrid_top_k_smaller_than_results(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """Should return only top_k results even when more are available."""
+        # Create 5 unique results from each search
+        mock_db.vector_search.return_value = [
+            {
+                "content": f"def func{i}(): pass",
+                "file_path": f"src/file{i}.py",
+                "language": "python",
+                "start_line": i * 10,
+                "end_line": i * 10 + 5,
+                "context": f"module: file{i}",
+                "score": 1.0 - (i * 0.1),
+            }
+            for i in range(5)
+        ]
+        mock_db.bm25_search.return_value = [
+            {
+                "content": f"def func{i + 5}(): pass",
+                "file_path": f"src/file{i + 5}.py",
+                "language": "python",
+                "start_line": (i + 5) * 10,
+                "end_line": (i + 5) * 10 + 5,
+                "context": f"module: file{i + 5}",
+                "score": 10.0 - i,
+            }
+            for i in range(5)
+        ]
+
+        results = searcher.search("query", mode="hybrid", top_k=3)
+
+        # Should return exactly 3 results
+        assert len(results) == 3
+        # All results should have RRF scores
+        for result in results:
+            assert result.score > 0
+
+    def test_search_hybrid_rrf_k_constant(self, searcher: Searcher) -> None:
+        """Should use RRF_K constant of 60 for fusion."""
+        assert searcher.RRF_K == 60
+
+    def test_search_semantic_empty_results(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """Should return empty list when semantic search finds no results."""
+        mock_db.vector_search.return_value = []
+
+        results = searcher.search("nonexistent", mode="semantic", top_k=5)
+
+        assert len(results) == 0
+        assert results == []
+
+    def test_search_keyword_empty_results(self, searcher: Searcher, mock_db: Mock) -> None:
+        """Should return empty list when keyword search finds no results."""
+        mock_db.bm25_search.return_value = []
+
+        results = searcher.search("nonexistent", mode="keyword", top_k=5)
+
+        assert len(results) == 0
+        assert results == []
+
+    def test_search_hybrid_large_top_k(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """Should handle large top_k values correctly."""
+        mock_db.vector_search.return_value = []
+        mock_db.bm25_search.return_value = []
+
+        searcher.search("query", mode="hybrid", top_k=100)
+
+        # Should fetch 3x top_k = 300 from each leg
+        mock_db.vector_search.assert_called_once()
+        assert mock_db.vector_search.call_args[1]["top_k"] == 300
+        mock_db.bm25_search.assert_called_once()
+        assert mock_db.bm25_search.call_args[1]["top_k"] == 300
+
+    def test_chunk_result_all_fields(self) -> None:
+        """Should preserve all fields in ChunkResult."""
+        result = ChunkResult(
+            content="test content",
+            file_path="/path/to/file.py",
+            language="python",
+            start_line=42,
+            end_line=100,
+            context="test context",
+            score=0.123456,
+        )
+
+        assert result.content == "test content"
+        assert result.file_path == "/path/to/file.py"
+        assert result.language == "python"
+        assert result.start_line == 42
+        assert result.end_line == 100
+        assert result.context == "test context"
+        assert result.score == 0.123456
+
+    def test_search_exceptions_are_searcherror_subclass(self) -> None:
+        """Should verify exception hierarchy."""
+        assert issubclass(IndexNotReadyError, SearchError)
+        assert issubclass(SearchError, Exception)
