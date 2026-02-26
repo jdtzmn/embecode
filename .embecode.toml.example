@@ -56,12 +56,12 @@ default = 1000       # All other languages
 [embeddings]
 # Embedding model to use
 # Options:
-#   - "nomic-embed-text-v1.5" → default, best quality/speed balance, 8192-token context
+#   - "nomic-ai/nomic-embed-text-v1.5" → default, best quality/speed balance, 8192-token context
 #   - "BAAI/bge-base-en-v1.5" → faster, smaller model
 #   - "all-MiniLM-L6-v2" → lightweight alternative
 #   - "voyage-code-3" → requires VOYAGE_API_KEY env var (best quality)
 #   - "text-embedding-3-large" → requires OPENAI_API_KEY env var
-model = "nomic-embed-text-v1.5"
+model = "nomic-ai/nomic-embed-text-v1.5"
 
 # Optional: Environment variable name for API key (if using external embedding service)
 # api_key_env = "VOYAGE_API_KEY"

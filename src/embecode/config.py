@@ -48,7 +48,7 @@ class IndexConfig:
 class EmbeddingsConfig:
     """Embedding model configuration."""
 
-    model: str = "nomic-embed-text-v1.5"
+    model: str = "nomic-ai/nomic-embed-text-v1.5"
     api_key_env: str | None = None
 
 
