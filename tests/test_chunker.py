@@ -850,3 +850,19 @@ class TestDefinitionExtraction:
 
         assert chunk is not None
         assert "Defines: function foo" in chunk.context
+
+    def test_no_defines_line_when_empty(self) -> None:
+        """Chunk context does NOT include `Defines:` line when definitions is empty."""
+        source = b"import os\n"
+        node = _make_node("import_statement")
+        node.start_byte = 0
+        node.end_byte = len(source)
+        node.start_point = (0, 0)
+        node.end_point = (0, 9)
+        node.children = []
+
+        chunk = _merge_nodes_into_chunk([node], source, "test.py", "python")
+
+        assert chunk is not None
+        assert "Defines:" not in chunk.context
+        assert chunk.definitions == ""
