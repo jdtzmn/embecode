@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from embecode.db import Database
     from embecode.embedder import Embedder
+
+logger = logging.getLogger(__name__)
 
 
 class SearchError(Exception):
