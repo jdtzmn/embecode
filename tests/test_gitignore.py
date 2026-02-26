@@ -453,3 +453,59 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_double_star_suffix_matches_subtree(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with /** suffix (e.g., abc/**) should exclude all files inside abc/ at any depth."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with /** suffix pattern
+            (project_path / ".gitignore").write_text("abc/**\n")
+
+            # Create 'abc' directory with files at various depths (all should be ignored)
+            abc = project_path / "abc"
+            abc.mkdir()
+            (abc / "file1.txt").write_text("file at abc root")
+            (abc / "file2.py").write_text("python file at abc root")
+
+            # Create subdirectory inside abc (should also be ignored)
+            abc_sub = abc / "sub"
+            abc_sub.mkdir()
+            (abc_sub / "deep1.txt").write_text("file in abc/sub")
+
+            # Create deeply nested directory inside abc (should also be ignored)
+            abc_nested = abc_sub / "nested"
+            abc_nested.mkdir()
+            (abc_nested / "deep2.js").write_text("file in abc/sub/nested")
+
+            # Create files outside abc directory (should be indexed)
+            (project_path / "main.py").write_text("print('root')")
+            (project_path / "readme.md").write_text("# README")
+
+            # Create another directory with files (should be indexed)
+            other = project_path / "other"
+            other.mkdir()
+            (other / "module.py").write_text("print('other')")
+            (other / "data.json").write_text('{"key": "value"}')
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # All files inside 'abc/' at any depth should be excluded
+            expected = [
+                Path("main.py"),
+                Path("other/data.json"),
+                Path("other/module.py"),
+                Path("readme.md"),
+            ]
+
+            assert relative_files == expected
