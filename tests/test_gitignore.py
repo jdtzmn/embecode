@@ -1460,3 +1460,66 @@ class TestGitignoreAndEmbeCodeConfig:
             ]
 
             assert relative_files == expected
+
+    def test_default_include_empty_indexes_all_non_gitignored(
+        self,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Config include=[] (new default) should index all files when no .gitignore exists."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # No .gitignore file created - all files should be indexed
+
+            # Create various files in different locations
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "readme.md").write_text("# Documentation")
+            (project_path / "config.yaml").write_text("key: value")
+
+            # Create subdirectory with files
+            src_dir = project_path / "src"
+            src_dir.mkdir()
+            (src_dir / "module.py").write_text("def func(): pass")
+            (src_dir / "helper.py").write_text("class Helper: pass")
+
+            # Create another subdirectory with files
+            tests_dir = project_path / "tests"
+            tests_dir.mkdir()
+            (tests_dir / "test_main.py").write_text("def test_something(): pass")
+
+            # Create a data directory with non-code files
+            data_dir = project_path / "data"
+            data_dir.mkdir()
+            (data_dir / "sample.json").write_text('{"data": "value"}')
+            (data_dir / "notes.txt").write_text("Some notes")
+
+            # Create config with include=[] (new default) and minimal exclude list
+            config = Mock(spec=EmbeCodeConfig)
+            config.index = IndexConfig(
+                include=[],  # Empty = index everything (new default)
+                exclude=[".git/"],  # Only exclude .git/ directory
+                languages=LanguageConfig(python=1500, default=1000),
+            )
+            config.embeddings = EmbeddingsConfig(model="test-model")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # With no .gitignore and include=[], ALL files should be indexed
+            expected = [
+                Path("config.yaml"),
+                Path("data/notes.txt"),
+                Path("data/sample.json"),
+                Path("main.py"),
+                Path("readme.md"),
+                Path("src/helper.py"),
+                Path("src/module.py"),
+                Path("tests/test_main.py"),
+            ]
+
+            assert relative_files == expected
