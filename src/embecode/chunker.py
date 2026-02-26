@@ -297,6 +297,8 @@ def _merge_nodes_into_chunk(
     definitions = ", ".join(defs)
 
     context = _get_context_info(file_path, language, content)
+    if definitions:
+        context += f"\nDefines: {definitions}"
 
     return Chunk.create(
         content=content,
