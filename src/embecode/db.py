@@ -449,6 +449,7 @@ class Database:
             - start_line: Starting line number
             - end_line: Ending line number
             - context: Contextual metadata
+            - definitions: Comma-separated definition names
             - score: Similarity score (higher is better)
         """
         self.connect()
@@ -465,6 +466,7 @@ class Database:
                 c.start_line,
                 c.end_line,
                 c.context,
+                c.definitions,
                 array_cosine_similarity(e.embedding, ?::FLOAT[]) as score
             FROM chunks c
             JOIN embeddings e ON c.id = e.chunk_id
@@ -494,7 +496,8 @@ class Database:
                 "start_line": row[3],
                 "end_line": row[4],
                 "context": row[5],
-                "score": float(row[6]) if row[6] is not None else 0.0,
+                "definitions": row[6],
+                "score": float(row[7]) if row[7] is not None else 0.0,
             }
             for row in results
         ]
@@ -520,6 +523,7 @@ class Database:
             - start_line: Starting line number
             - end_line: Ending line number
             - context: Contextual metadata
+            - definitions: Comma-separated definition names
             - score: BM25 relevance score (higher is better)
         """
         self.connect()
@@ -538,6 +542,7 @@ class Database:
                         c.start_line,
                         c.end_line,
                         c.context,
+                        c.definitions,
                         fts.score
                     FROM (
                         SELECT fts_main_chunks.match_bm25(id, ?) AS score, id
@@ -558,6 +563,7 @@ class Database:
                         c.start_line,
                         c.end_line,
                         c.context,
+                        c.definitions,
                         fts.score
                     FROM (
                         SELECT fts_main_chunks.match_bm25(id, ?) AS score, id
@@ -589,7 +595,8 @@ class Database:
                 "start_line": row[3],
                 "end_line": row[4],
                 "context": row[5],
-                "score": float(row[6]) if row[6] is not None else 0.0,
+                "definitions": row[6],
+                "score": float(row[7]) if row[7] is not None else 0.0,
             }
             for row in results
         ]
@@ -686,7 +693,7 @@ class Database:
             raise RuntimeError(msg)
 
         query_sql = """
-            SELECT content, file_path, language, start_line, end_line, context
+            SELECT content, file_path, language, start_line, end_line, context, definitions
             FROM chunks
             WHERE LOWER(content) LIKE ?
         """
@@ -710,6 +717,7 @@ class Database:
                 "start_line": row[3],
                 "end_line": row[4],
                 "context": row[5],
+                "definitions": row[6],
                 "score": 1.0,  # Uniform score for fallback
             }
             for row in results
