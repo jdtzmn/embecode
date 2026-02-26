@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import tempfile
+import unittest.mock
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -1948,8 +1949,70 @@ class TestGitignoreEdgeCases:
         mock_embedder: Mock,
     ) -> None:
         """Each .gitignore file should only be read once per indexing run."""
-        # TODO: Implement test for .gitignore caching behavior
-        pass
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create a nested directory structure with multiple .gitignore files
+            # Root .gitignore
+            (project_path / ".gitignore").write_text("*.log\n")
+
+            # Directory 'a' with its own .gitignore
+            (project_path / "a").mkdir()
+            (project_path / "a" / ".gitignore").write_text("*.tmp\n")
+            (project_path / "a" / "file1.py").write_text("# file1")
+            (project_path / "a" / "file2.py").write_text("# file2")
+
+            # Directory 'a/b' with its own .gitignore
+            (project_path / "a" / "b").mkdir()
+            (project_path / "a" / "b" / ".gitignore").write_text("*.cache\n")
+            (project_path / "a" / "b" / "file3.py").write_text("# file3")
+            (project_path / "a" / "b" / "file4.py").write_text("# file4")
+
+            # Directory 'c' with its own .gitignore
+            (project_path / "c").mkdir()
+            (project_path / "c" / ".gitignore").write_text("*.bak\n")
+            (project_path / "c" / "file5.py").write_text("# file5")
+
+            # Track how many times each .gitignore is opened
+            original_open = open
+            open_calls: dict[Path, int] = {}
+
+            def tracked_open(file, *args, **kwargs):
+                """Track open calls to .gitignore files."""
+                if isinstance(file, (str, Path)):
+                    file_path = Path(file)
+                    if file_path.name == ".gitignore":
+                        open_calls[file_path] = open_calls.get(file_path, 0) + 1
+                return original_open(file, *args, **kwargs)
+
+            # Patch open to track calls
+            import builtins
+
+            with unittest.mock.patch.object(builtins, "open", tracked_open):
+                # Create indexer and collect files
+                indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+                files = indexer._collect_files()
+
+            # Verify we collected the expected files
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+            expected = [
+                Path("a/b/file3.py"),
+                Path("a/b/file4.py"),
+                Path("a/file1.py"),
+                Path("a/file2.py"),
+                Path("c/file5.py"),
+            ]
+            assert relative_files == expected
+
+            # Verify each .gitignore was opened exactly once
+            assert len(open_calls) == 4, (
+                f"Expected 4 .gitignore files to be opened, got {len(open_calls)}"
+            )
+            for gitignore_path, count in open_calls.items():
+                assert count == 1, (
+                    f"{gitignore_path} was opened {count} times, expected 1. "
+                    "Each .gitignore should be cached after first read."
+                )
 
     def test_project_with_only_gitignored_files(
         self,
