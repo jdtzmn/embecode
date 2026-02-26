@@ -790,3 +790,40 @@ class TestGitignoreNegation:
             ]
 
             assert relative_files == expected
+
+    def test_negation_order_matters(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Last matching pattern wins: negation then broader pattern should exclude all."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with NEGATION FIRST, then broader pattern
+            # Pattern: !important.log (re-include important.log - but nothing was excluded yet)
+            # Pattern: *.log (exclude all .log files - this comes LAST so it wins)
+            gitignore = project_path / ".gitignore"
+            gitignore.write_text("!important.log\n*.log\n")
+
+            # Create test files
+            (project_path / "important.log").write_text("critical data")
+            (project_path / "other.log").write_text("regular log")
+            (project_path / "debug.log").write_text("debug info")
+            (project_path / "main.py").write_text("print('hello')")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Since *.log comes AFTER !important.log, the last matching rule wins
+            # All .log files (including important.log) should be excluded
+            expected = [
+                Path("main.py"),  # Only non-.log file
+            ]
+
+            assert relative_files == expected
