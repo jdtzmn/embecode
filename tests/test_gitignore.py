@@ -622,3 +622,54 @@ class TestGitignorePatternAnchoring:
             ]
 
             assert relative_files == expected
+
+    def test_question_mark_matches_single_non_slash_char(
+        self,
+        mock_config: EmbeCodeConfig,
+        mock_db: Mock,
+        mock_embedder: Mock,
+    ) -> None:
+        """Pattern with ? (e.g., foo?.txt) should match exactly one character except /."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            project_path = Path(tmpdir)
+
+            # Create .gitignore with ? pattern
+            (project_path / ".gitignore").write_text("foo?.txt\n")
+
+            # Create files that should match (exactly one char after 'foo')
+            (project_path / "fooa.txt").write_text("matches - one char")  # Should be ignored
+            (project_path / "food.txt").write_text("matches - one char")  # Should be ignored
+            (project_path / "foo1.txt").write_text("matches - one char")  # Should be ignored
+
+            # Create files that should NOT match
+            (project_path / "foo.txt").write_text("no char after foo")  # NOT ignored (no char)
+            (project_path / "foooo.txt").write_text("too many chars")  # NOT ignored (three chars)
+            (project_path / "foobar.txt").write_text("too many chars")  # NOT ignored (three chars)
+
+            # Create a file with / in the position (should NOT match - ? doesn't match /)
+            subdir = project_path / "foo"
+            subdir.mkdir()
+            (subdir / ".txt").write_text("slash in position")  # NOT ignored (? doesn't match /)
+
+            # Create other normal files
+            (project_path / "main.py").write_text("print('hello')")
+            (project_path / "readme.md").write_text("# Readme")
+
+            # Create indexer and collect files
+            indexer = Indexer(project_path, mock_config, mock_db, mock_embedder)
+            files = indexer._collect_files()
+
+            # Convert to relative paths for easier assertion
+            relative_files = sorted([f.relative_to(project_path) for f in files])
+
+            # Only foo?.txt pattern (exactly one char) should be excluded
+            expected = [
+                Path("foo/.txt"),  # NOT ignored (? doesn't match /)
+                Path("foo.txt"),  # NOT ignored (no char after foo)
+                Path("foobar.txt"),  # NOT ignored (three chars)
+                Path("foooo.txt"),  # NOT ignored (three chars)
+                Path("main.py"),  # NOT ignored
+                Path("readme.md"),  # NOT ignored
+            ]
+
+            assert relative_files == expected
