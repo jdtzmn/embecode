@@ -340,7 +340,7 @@ class Indexer:
         files = []
 
         # Use os.walk for depth-first traversal with control over directory order
-        for root, _dirs, filenames in os.walk(self.project_path):
+        for root, dirs, filenames in os.walk(self.project_path):
             root_path = Path(root)
 
             # Load .gitignore for current directory if present
