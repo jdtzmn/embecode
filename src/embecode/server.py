@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import threading
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +20,10 @@ from embecode.config import (  # noqa: F401 (EmbeCodeConfig needed for test mock
     EmbeCodeConfig,
     load_config,
 )
-from embecode.ipc import IPCClient, IPCServer
 from embecode.db import Database
 from embecode.embedder import Embedder
 from embecode.indexer import Indexer
+from embecode.ipc import IPCClient, IPCServer
 from embecode.searcher import IndexNotReadyError, Searcher
 from embecode.watcher import Watcher
 
@@ -456,7 +457,16 @@ class EmbeCodeServer:
 
         try:
             response = self.searcher.search(query, mode=mode, top_k=top_k, path=path)
-            return [result.to_dict() for result in response.results]
+            results = [result.to_dict(query=query) for result in response.results]
+
+            # Add file grouping hint when multiple results share a file
+            file_counts = Counter(r["file_path"] for r in results)
+            for r in results:
+                count = file_counts[r["file_path"]]
+                if count > 1:
+                    r["file_result_count"] = count
+
+            return results
         except IndexNotReadyError as e:
             # Get progress if indexing is in progress
             status = self.indexer.get_status()

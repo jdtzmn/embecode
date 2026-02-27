@@ -22,32 +22,7 @@ import pytest
 from embecode.config import load_config
 from embecode.db import Database
 from embecode.indexer import Indexer
-
-# ============================================================================
-# Mock Embedder
-# ============================================================================
-
-
-class MockEmbedder:
-    """Mock embedder that returns fixed-dimension zero vectors.
-
-    This avoids loading a real sentence-transformers model while still
-    exercising the embedding storage and database paths.
-    """
-
-    def __init__(self, dimension: int = 768) -> None:
-        """Initialize mock embedder with specified dimension."""
-        self._dimension = dimension
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """Generate mock embeddings (zero vectors)."""
-        return [[0.0] * self._dimension for _ in texts]
-
-    @property
-    def dimension(self) -> int:
-        """Get embedding dimension."""
-        return self._dimension
-
+from tests.helpers.mocks import MockEmbedder
 
 # ============================================================================
 # Synthetic Codebase Generator

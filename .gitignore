@@ -38,3 +38,9 @@ htmlcov/
 
 # Persistent benchmark database (rebuilt automatically if missing)
 .bench_db/
+
+# Tool runtime data
+.chunkhound/
+.iteratr/
+iteratr.yml
+.opencode/

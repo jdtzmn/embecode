@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -12,6 +13,124 @@ if TYPE_CHECKING:
     from embecode.embedder import Embedder
 
 logger = logging.getLogger(__name__)
+
+# Max match lines to report per chunk (prevents bloat on large chunks)
+_MAX_MATCH_LINES = 8
+
+
+def _tokenize_query(query: str) -> list[str]:
+    """Extract deduplicated lowercase tokens from a query string.
+
+    Tokens are ``[A-Za-z0-9_]+`` runs with single-character tokens dropped
+    (too noisy).  Order is preserved; duplicates keep only the first
+    occurrence.
+    """
+    raw = re.findall(r"[A-Za-z0-9_]+", query)
+    seen: set[str] = set()
+    tokens: list[str] = []
+    for tok in raw:
+        lower = tok.lower()
+        if len(lower) <= 1 or lower in seen:
+            continue
+        seen.add(lower)
+        tokens.append(lower)
+    return tokens
+
+
+def _find_match_lines(
+    content: str,
+    query: str,
+    start_line: int,
+) -> list[int]:
+    """Return absolute line numbers in *content* that contain any query token.
+
+    Lines are numbered starting from *start_line*.  The result is sorted
+    ascending and capped at :data:`_MAX_MATCH_LINES`.
+    """
+    tokens = _tokenize_query(query)
+    if not tokens:
+        return []
+
+    matches: list[int] = []
+    for idx, line in enumerate(content.splitlines()):
+        line_lower = line.lower()
+        if any(tok in line_lower for tok in tokens):
+            matches.append(start_line + idx)
+            if len(matches) >= _MAX_MATCH_LINES:
+                break
+    return matches
+
+
+def _pick_preview_lines(
+    content: str,
+    query: str | None = None,
+) -> str:
+    """Generate a 2-line preview, preferring lines that match *query* terms.
+
+    When *query* is provided and produces lexical matches the preview shows
+    the best matching line (highest token-hit count, earliest index as
+    tiebreak) plus a second line (nearest other match, or nearest non-empty
+    neighbour).
+
+    Falls back to the first 2 non-empty lines when *query* is ``None`` or
+    has no lexical overlap with *content*.  The result is capped at 200
+    characters with ``...`` appended when truncated.
+    """
+    all_lines = content.splitlines()
+
+    picked: list[tuple[int, str]] | None = None
+
+    if query:
+        tokens = _tokenize_query(query)
+        if tokens:
+            # Score each non-empty line by how many tokens it contains
+            scored: list[tuple[int, str, int]] = []
+            for idx, line in enumerate(all_lines):
+                if not line.strip():
+                    continue
+                line_lower = line.lower()
+                count = sum(1 for tok in tokens if tok in line_lower)
+                if count > 0:
+                    scored.append((idx, line, count))
+
+            if scored:
+                # Best match: highest count, earliest index
+                best = max(scored, key=lambda t: (t[2], -t[0]))
+                best_idx, best_line = best[0], best[1]
+
+                # Second line: nearest other match, or nearest non-empty line
+                second: tuple[int, str] | None = None
+                other_matches = [(i, line) for i, line, c in scored if i != best_idx]
+                if other_matches:
+                    second = min(other_matches, key=lambda t: abs(t[0] - best_idx))
+                else:
+                    # Fall back to nearest non-empty neighbour
+                    for dist in range(1, len(all_lines)):
+                        for candidate_idx in (best_idx - dist, best_idx + dist):
+                            if (
+                                0 <= candidate_idx < len(all_lines)
+                                and all_lines[candidate_idx].strip()
+                            ):
+                                second = (candidate_idx, all_lines[candidate_idx])
+                                break
+                        if second is not None:
+                            break
+
+                if second is not None:
+                    pair = sorted([(best_idx, best_line), second], key=lambda t: t[0])
+                    picked = pair
+                else:
+                    picked = [(best_idx, best_line)]
+
+    # Fallback: first 2 non-empty lines
+    if picked is None:
+        non_empty = [(i, line) for i, line in enumerate(all_lines) if line.strip()]
+        picked = non_empty[:2]
+
+    preview = "\n".join(line for _, line in picked)
+    if len(preview) > 200:
+        return preview[:197] + "..."
+    return preview
 
 
 class SearchError(Exception):
@@ -34,25 +153,25 @@ class ChunkResult:
     definitions: str
     score: float  # Relevance score (higher is better)
 
-    def preview(self) -> str:
-        """Generate a 2-line preview from chunk content."""
-        lines = [line for line in self.content.splitlines() if line.strip()]
-        preview = "\n".join(lines[:2])
-        if len(preview) > 200:
-            return preview[:197] + "..."
-        return preview
+    def preview(self, query: str | None = None) -> str:
+        """Generate a 2-line preview, preferring lines matching query terms."""
+        return _pick_preview_lines(self.content, query)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, query: str | None = None) -> dict:
         """Convert result to concise dictionary for API responses (no full content)."""
-        return {
+        match_lines = _find_match_lines(self.content, query, self.start_line) if query else []
+        result = {
             "file_path": self.file_path,
             "language": self.language,
             "start_line": self.start_line,
             "end_line": self.end_line,
             "definitions": self.definitions,
-            "preview": self.preview(),
+            "preview": self.preview(query),
             "score": self.score,
         }
+        if match_lines:
+            result["match_lines"] = match_lines
+        return result
 
 
 @dataclass

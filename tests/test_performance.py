@@ -23,6 +23,7 @@ from embecode.config import LanguageConfig, load_config
 from embecode.db import Database
 from embecode.indexer import Indexer
 from embecode.searcher import Searcher
+from tests.helpers.mocks import MockEmbedder
 
 # ============================================================================
 # Test Configuration
@@ -187,22 +188,6 @@ class MockDatabase:
 
     def shrink_memory(self) -> None:
         """No-op: mock database has nothing to shrink."""
-
-
-class MockEmbedder:
-    """Fast mock embedder for performance testing."""
-
-    def __init__(self) -> None:
-        """Initialize mock embedder."""
-        self.dimension = 384
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """Generate fake embeddings (fast)."""
-        # Return zero vectors for speed
-        return [[0.0] * self.dimension for _ in texts]
-
-    def unload(self) -> None:
-        """No-op: mock embedder has nothing to unload."""
 
 
 # ============================================================================

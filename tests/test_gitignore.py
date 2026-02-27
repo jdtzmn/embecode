@@ -1567,8 +1567,9 @@ class TestGitignoreWatcher:
         mock_embedder: Mock,
     ) -> None:
         """Modifying an existing .gitignore file should trigger a full reindex."""
-        from embecode.watcher import Watcher
         from watchfiles import Change
+
+        from embecode.watcher import Watcher
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = Path(tmpdir)
@@ -1617,8 +1618,9 @@ class TestGitignoreWatcher:
         mock_embedder: Mock,
     ) -> None:
         """Creating a new .gitignore file should trigger a full reindex."""
-        from embecode.watcher import Watcher
         from watchfiles import Change
+
+        from embecode.watcher import Watcher
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = Path(tmpdir)
@@ -1667,8 +1669,9 @@ class TestGitignoreWatcher:
         mock_embedder: Mock,
     ) -> None:
         """Gitignored files that are modified should not trigger reindexing."""
-        from embecode.watcher import Watcher
         from watchfiles import Change
+
+        from embecode.watcher import Watcher
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = Path(tmpdir)
@@ -1724,8 +1727,9 @@ class TestGitignoreWatcher:
         mock_embedder: Mock,
     ) -> None:
         """Non-gitignored files that are modified should still be processed normally."""
-        from embecode.watcher import Watcher
         from watchfiles import Change
+
+        from embecode.watcher import Watcher
 
         with tempfile.TemporaryDirectory() as tmpdir:
             project_path = Path(tmpdir)

@@ -546,6 +546,7 @@ class TestEmbeCodeServer:
             "definitions",
             "preview",
             "score",
+            "match_lines",
         }
         assert set(results[0].keys()) == expected_keys
 

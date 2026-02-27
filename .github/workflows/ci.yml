@@ -5,6 +5,20 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Run full test suite nightly at 04:00 UTC
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+    inputs:
+      test_scope:
+        description: "Which tests to run"
+        required: false
+        default: "fast"
+        type: choice
+        options:
+          - fast
+          - full
+          - slow-only
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -14,6 +28,8 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    # Skip lint on scheduled runs (only tests matter there)
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v4
 
@@ -36,13 +52,14 @@ jobs:
       - name: Ruff format
         run: uv run ruff format --check src/ tests/
 
-  test:
-    name: Test (Python ${{ matrix.python-version }})
+  test-fast:
+    name: Test (fast)
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12"]
+    # Run on push/PR and when manually triggered with 'fast' or 'full'
+    if: >-
+      github.event_name == 'push' ||
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.test_scope != 'slow-only')
 
     steps:
       - uses: actions/checkout@v4
@@ -52,13 +69,82 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
 
       - name: Install dependencies
         run: uv sync --group dev
 
-      - name: Run tests
-        run: uv run pytest
+      - name: Run fast tests
+        run: >-
+          uv run pytest
+          -m "not slow and not memory"
+          -x
+          --no-cov
+          -n auto
+          --dist worksteal
+
+  test-slow:
+    name: Test (slow / integration)
+    runs-on: ubuntu-latest
+    # Run on schedule, on pushes to main, or when manually triggered with 'full' or 'slow-only'
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.test_scope != 'fast')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run slow tests (excluding memory)
+        run: >-
+          uv run pytest
+          -m "slow and not memory"
+          --no-cov
+          -v
+
+  test-memory:
+    name: Test (memory)
+    runs-on: ubuntu-latest
+    # Only run on schedule or manual 'full'/'slow-only' trigger
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.test_scope != 'fast')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run memory tests
+        run: >-
+          uv run pytest
+          -m "memory"
+          --no-cov
+          -v -s

@@ -556,7 +556,7 @@ class Indexer:
             ancestor_dirs.append(current)
 
         # Also check project root
-        all_dirs = [self.project_path] + ancestor_dirs
+        all_dirs = [self.project_path, *ancestor_dirs]
 
         # Track the final match result across all .gitignore files
         # None = no match yet, True = ignored, False = negated (not ignored)
@@ -646,7 +646,7 @@ class Indexer:
             ancestor_dirs.append(current)
 
         # Also check project root
-        all_dirs = [self.project_path] + ancestor_dirs
+        all_dirs = [self.project_path, *ancestor_dirs]
 
         # Track the final match result across all .gitignore files
         final_match: bool | None = None
@@ -794,8 +794,9 @@ class Indexer:
         Returns:
             True if indexing completed, False if timeout occurred.
         """
-        if self._indexing_thread is None:
+        thread = self._indexing_thread
+        if thread is None:
             return True
 
-        self._indexing_thread.join(timeout=timeout)
-        return not self._indexing_thread.is_alive()
+        thread.join(timeout=timeout)
+        return not thread.is_alive()
