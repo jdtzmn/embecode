@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from embecode.indexer import IndexStatus
-from embecode.searcher import ChunkResult, IndexNotReadyError
+from embecode.searcher import ChunkResult, IndexNotReadyError, SearchResponse, SearchTimings
 from embecode.server import (
     EmbeCodeServer,
     EmbeddingModelChangedError,
@@ -86,6 +86,7 @@ def mock_searcher() -> Mock:
 class TestEmbeCodeServer:
     """Tests for EmbeCodeServer class."""
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -102,6 +103,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -113,6 +115,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 0}
@@ -135,6 +139,7 @@ class TestEmbeCodeServer:
         _args, kwargs = mock_thread.call_args
         assert kwargs["daemon"] is True
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -151,6 +156,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -164,6 +170,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -178,6 +186,7 @@ class TestEmbeCodeServer:
         _args, kwargs = mock_thread.call_args
         assert kwargs["daemon"] is True
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -194,6 +203,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -206,6 +216,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -221,7 +233,9 @@ class TestEmbeCodeServer:
             definitions="function hello",
             score=0.95,
         )
-        mock_searcher.search.return_value = [result]
+        mock_searcher.search.return_value = SearchResponse(
+            results=[result], timings=SearchTimings()
+        )
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server
@@ -240,6 +254,7 @@ class TestEmbeCodeServer:
             "hello function", mode="semantic", top_k=5, path=None
         )
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -256,6 +271,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -269,6 +285,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 0}
@@ -298,6 +316,7 @@ class TestEmbeCodeServer:
         with pytest.raises(IndexNotReadyError, match=r"5 files processed.*25% complete"):
             server.search_code("test query")
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -314,6 +333,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -326,6 +346,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -354,6 +376,7 @@ class TestEmbeCodeServer:
         assert result["embedding_model"] == "test-model"
         assert result["is_indexing"] is False
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -372,6 +395,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -385,6 +409,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -406,6 +432,7 @@ class TestEmbeCodeServer:
         mock_watcher.stop.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -422,6 +449,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -434,12 +462,14 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
         mock_db_class.return_value = mock_db
 
-        mock_searcher.search.return_value = []
+        mock_searcher.search.return_value = SearchResponse(results=[], timings=SearchTimings())
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server
@@ -451,6 +481,7 @@ class TestEmbeCodeServer:
         # Verify path was passed to searcher
         mock_searcher.search.assert_called_once_with("test", mode="hybrid", top_k=10, path="src/")
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -467,6 +498,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -479,6 +511,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -494,7 +528,9 @@ class TestEmbeCodeServer:
             definitions="function hello",
             score=0.95,
         )
-        mock_searcher.search.return_value = [result]
+        mock_searcher.search.return_value = SearchResponse(
+            results=[result], timings=SearchTimings()
+        )
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server and search
@@ -516,6 +552,7 @@ class TestEmbeCodeServer:
         # Verify content field is excluded (concise format)
         assert "content" not in results[0]
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -532,6 +569,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -544,6 +582,8 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -562,7 +602,9 @@ class TestEmbeCodeServer:
             )
             for i in range(10)
         ]
-        mock_searcher.search.return_value = mock_results
+        mock_searcher.search.return_value = SearchResponse(
+            results=mock_results, timings=SearchTimings()
+        )
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server and search without explicit top_k
@@ -581,6 +623,7 @@ class TestEmbeCodeServer:
 class TestCatchUpStartup:
     """Tests for catch-up indexing startup logic and embedding model detection."""
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -597,6 +640,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -607,6 +651,8 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Test with empty DB
@@ -621,6 +667,7 @@ class TestCatchUpStartup:
         EmbeCodeServer(temp_project)
         assert mock_thread.call_count == 1
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -639,6 +686,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -650,6 +698,8 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
         mock_db_class.return_value = mock_db
 
@@ -664,6 +714,7 @@ class TestCatchUpStartup:
         # Now watcher should be started
         mock_watcher_class.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -682,6 +733,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -693,6 +745,8 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
         mock_db_class.return_value = mock_db
 
@@ -708,6 +762,7 @@ class TestCatchUpStartup:
         # Watcher should still be started despite the failure
         mock_watcher_class.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -724,6 +779,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -734,6 +790,8 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Stored model matches configured model
@@ -747,6 +805,7 @@ class TestCatchUpStartup:
         # set_metadata should NOT be called (model already stored and matches)
         mock_db.set_metadata.assert_not_called()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -763,6 +822,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -773,6 +833,8 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Stored model differs from configured model ("test-model")
@@ -790,6 +852,7 @@ class TestCatchUpStartup:
         # Thread should NOT have been started
         mock_thread.assert_not_called()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -806,6 +869,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -816,6 +880,8 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # No stored model (first run)
@@ -831,6 +897,7 @@ class TestCatchUpStartup:
         # Catch-up thread should still be spawned
         mock_thread.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -847,6 +914,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -857,6 +925,8 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Track call order
