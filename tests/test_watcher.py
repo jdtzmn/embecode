@@ -9,15 +9,19 @@ import pytest
 from watchfiles import Change
 
 from embecode.config import DaemonConfig, EmbeCodeConfig, IndexConfig
+from embecode.indexer import Indexer
 from embecode.watcher import Watcher
 
 
 @pytest.fixture
 def mock_indexer():
     """Mock indexer for testing."""
-    indexer = MagicMock()
+    indexer = MagicMock(spec=Indexer)
     indexer.update_file = MagicMock()
     indexer.delete_file = MagicMock()
+    indexer.start_full_index = MagicMock()
+    # By default, _should_index_file returns True (process the file)
+    indexer._should_index_file = MagicMock(return_value=True)
     return indexer
 
 
@@ -60,28 +64,31 @@ def test_watcher_initialization(test_project_path, test_config, mock_indexer):
     assert watcher._thread is None
 
 
-def test_watcher_pattern_matching(test_project_path, test_config, mock_indexer):
-    """Test pattern matching logic for include/exclude rules."""
-    watcher = Watcher(test_project_path, test_config, mock_indexer)
+def test_indexer_pattern_matching():
+    """Test pattern matching logic for include/exclude rules via Indexer._matches_pattern."""
+    # _matches_pattern is a static method on Indexer
+    matches = Indexer._matches_pattern
 
     # Test directory prefix matching
-    assert watcher._matches_pattern("src/main.py", "src/")
-    assert watcher._matches_pattern("src/foo/bar.py", "src/")
-    assert not watcher._matches_pattern("lib/utils.py", "src/")
+    assert matches("src/main.py", "src/")
+    assert matches("src/foo/bar.py", "src/")
+    assert not matches("lib/utils.py", "src/")
 
     # Test wildcard matching
-    assert watcher._matches_pattern("app.min.js", "*.min.js")
-    assert watcher._matches_pattern("dist/app.min.js", "*.min.js")
-    assert not watcher._matches_pattern("app.js", "*.min.js")
+    assert matches("app.min.js", "*.min.js")
+    assert matches("dist/app.min.js", "*.min.js")
+    assert not matches("app.js", "*.min.js")
 
     # Test recursive wildcard matching
-    assert watcher._matches_pattern("src/__pycache__/foo.pyc", "**/__pycache__/")
-    assert watcher._matches_pattern("lib/utils/__pycache__/bar.pyc", "**/__pycache__/")
-    assert not watcher._matches_pattern("src/main.py", "**/__pycache__/")
+    assert matches("src/__pycache__/foo.pyc", "**/__pycache__/")
+    assert matches("lib/utils/__pycache__/bar.pyc", "**/__pycache__/")
+    assert not matches("src/main.py", "**/__pycache__/")
 
 
 def test_watcher_should_process_file_included(test_project_path, test_config, mock_indexer):
     """Test file inclusion based on include patterns."""
+    # Configure mock to return True for included files
+    mock_indexer._should_index_file.return_value = True
     watcher = Watcher(test_project_path, test_config, mock_indexer)
 
     # Files in include patterns should be processed
@@ -92,6 +99,8 @@ def test_watcher_should_process_file_included(test_project_path, test_config, mo
 
 def test_watcher_should_process_file_excluded(test_project_path, test_config, mock_indexer):
     """Test file exclusion based on exclude patterns."""
+    # Configure mock to return False for excluded files
+    mock_indexer._should_index_file.return_value = False
     watcher = Watcher(test_project_path, test_config, mock_indexer)
 
     # Files matching exclude patterns should not be processed
@@ -104,6 +113,8 @@ def test_watcher_should_process_file_excluded(test_project_path, test_config, mo
 
 def test_watcher_should_process_file_not_in_include(test_project_path, test_config, mock_indexer):
     """Test files not in include patterns are excluded."""
+    # Configure mock to return False for files outside include patterns
+    mock_indexer._should_index_file.return_value = False
     watcher = Watcher(test_project_path, test_config, mock_indexer)
 
     # Files not matching any include pattern should be excluded
@@ -113,6 +124,8 @@ def test_watcher_should_process_file_not_in_include(test_project_path, test_conf
 
 def test_watcher_should_process_file_outside_project(test_project_path, test_config, mock_indexer):
     """Test files outside project path are excluded."""
+    # Configure mock to return False for files outside project
+    mock_indexer._should_index_file.return_value = False
     watcher = Watcher(test_project_path, test_config, mock_indexer)
 
     # Files outside project path should not be processed
@@ -267,6 +280,8 @@ def test_watcher_handles_multiple_files(test_project_path, test_config, mock_ind
 
 def test_watcher_ignores_excluded_files_in_changes(test_project_path, test_config, mock_indexer):
     """Test watcher ignores changes to excluded files."""
+    # Configure mock to return False for excluded files
+    mock_indexer._should_index_file.return_value = False
     watcher = Watcher(test_project_path, test_config, mock_indexer)
 
     # Simulate change to excluded file

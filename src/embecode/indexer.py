@@ -794,8 +794,9 @@ class Indexer:
         Returns:
             True if indexing completed, False if timeout occurred.
         """
-        if self._indexing_thread is None:
+        thread = self._indexing_thread
+        if thread is None:
             return True
 
-        self._indexing_thread.join(timeout=timeout)
-        return not self._indexing_thread.is_alive()
+        thread.join(timeout=timeout)
+        return not thread.is_alive()
