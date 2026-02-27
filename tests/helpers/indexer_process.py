@@ -51,7 +51,7 @@ def main() -> None:
 
     db = Database(db_path)
     try:
-        db.connect(read_only=False)
+        db.connect()
         config = load_config(project_dir)
         embedder = FixedVectorEmbedder()
         indexer = Indexer(project_dir, config, db, embedder)  # type: ignore[arg-type]

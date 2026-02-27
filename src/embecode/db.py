@@ -37,22 +37,19 @@ class Database:
         self.db_path = db_path
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._is_initialized = False
-        self._read_only = False
         self._db_lock = threading.Lock()
 
-    @property
-    def is_read_only(self) -> bool:
-        """Return True if the current connection was opened in read-only mode."""
-        return self._read_only
+    def connect(self) -> None:
+        """Open a read-write database connection and initialize schema if needed.
 
-    def connect(self, read_only: bool = False) -> None:
-        """Open database connection and initialize schema if needed.
+        Only the owner process should call this method.  Reader processes
+        route queries to the owner via IPC and never open a DuckDB connection.
 
-        Args:
-            read_only: If True, open the connection in read-only mode.  A
-                read-only connection cannot write to the database but can
-                coexist with a separate read-write connection from another
-                process (DuckDB supports this).
+        Note:
+            DuckDB does **not** support concurrent cross-process access to the
+            same database file — not even one read-write + one read-only.
+            The lock-file daemon protocol ensures that only a single process
+            (the owner) holds a DuckDB connection at any time.
         """
         with self._db_lock:
             if self._conn is not None:
@@ -61,67 +58,35 @@ class Database:
             # Create parent directory if it doesn't exist
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Open connection
-            self._conn = duckdb.connect(str(self.db_path), read_only=read_only)
-            self._read_only = read_only
+            # Open read-write connection
+            self._conn = duckdb.connect(str(self.db_path))
 
-            if not read_only:
-                # Cap DuckDB's buffer pool so it doesn't consume all available RAM.
-                # Without this, DuckDB defaults to ~80% of system RAM and never shrinks
-                # its buffer pool voluntarily, causing the post-indexing memory floor.
-                try:
-                    self._conn.execute("SET memory_limit='2GB'")
-                except Exception as e:
-                    logger.warning(f"Failed to set DuckDB memory limit: {e}")
+            # Cap DuckDB's buffer pool so it doesn't consume all available RAM.
+            # Without this, DuckDB defaults to ~80% of system RAM and never shrinks
+            # its buffer pool voluntarily, causing the post-indexing memory floor.
+            try:
+                self._conn.execute("SET memory_limit='2GB'")
+            except Exception as e:
+                logger.warning(f"Failed to set DuckDB memory limit: {e}")
 
-                # Install and load VSS extension for vector similarity search
-                try:
-                    self._conn.execute("INSTALL vss")
-                    self._conn.execute("LOAD vss")
-                except Exception as e:
-                    logger.warning(f"Failed to load VSS extension: {e}")
+            # Install and load VSS extension for vector similarity search
+            try:
+                self._conn.execute("INSTALL vss")
+                self._conn.execute("LOAD vss")
+            except Exception as e:
+                logger.warning(f"Failed to load VSS extension: {e}")
 
-                # Install and load FTS extension for full-text search
-                try:
-                    self._conn.execute("INSTALL fts")
-                    self._conn.execute("LOAD fts")
-                except Exception as e:
-                    logger.warning(f"Failed to load FTS extension: {e}")
-            else:
-                # Extensions are already installed; just load them
-                try:
-                    self._conn.execute("LOAD vss")
-                except Exception as e:
-                    logger.warning(f"Failed to load VSS extension (read-only): {e}")
-                try:
-                    self._conn.execute("LOAD fts")
-                except Exception as e:
-                    logger.warning(f"Failed to load FTS extension (read-only): {e}")
+            # Install and load FTS extension for full-text search
+            try:
+                self._conn.execute("INSTALL fts")
+                self._conn.execute("LOAD fts")
+            except Exception as e:
+                logger.warning(f"Failed to load FTS extension: {e}")
 
-            # Initialize schema if needed (skip in read-only mode — the owner
-            # is responsible for schema creation)
-            if not read_only and not self._is_initialized:
+            # Initialize schema if needed
+            if not self._is_initialized:
                 self._initialize_schema()
                 self._is_initialized = True
-
-    def reconnect(self, read_only: bool = False) -> None:
-        """Close the current connection and reopen with the given mode.
-
-        This is used during reader → owner promotion: the reader must close
-        its read-only connection before reopening read-write.
-
-        Args:
-            read_only: Mode for the new connection.
-        """
-        with self._db_lock:
-            if self._conn is not None:
-                self._conn.close()
-                self._conn = None
-                self._is_initialized = False
-                self._read_only = False
-
-        # connect() acquires the lock itself, so call it outside the lock
-        self.connect(read_only=read_only)
 
     def close(self) -> None:
         """Close database connection."""
@@ -130,7 +95,6 @@ class Database:
                 self._conn.close()
                 self._conn = None
                 self._is_initialized = False
-                self._read_only = False
 
     def shrink_memory(self) -> None:
         """Release DuckDB's buffer pool pages back to the OS after a bulk write.

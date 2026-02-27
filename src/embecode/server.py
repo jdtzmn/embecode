@@ -23,6 +23,7 @@ from embecode.config import (  # noqa: F401 (EmbeCodeConfig needed for test mock
 from embecode.db import Database
 from embecode.embedder import Embedder
 from embecode.indexer import Indexer
+from embecode.ipc import IPCClient, IPCServer
 from embecode.searcher import IndexNotReadyError, Searcher
 from embecode.watcher import Watcher
 
@@ -52,8 +53,8 @@ def is_pid_alive(pid: int) -> bool:
         return True
 
 
-def _cleanup_lock(lock_path: Path, pid: int) -> None:
-    """Remove the daemon lock file if we are still the owner.
+def _cleanup_lock(lock_path: Path, socket_path: Path, pid: int) -> None:
+    """Remove the daemon lock and socket files if we are still the owner.
 
     This is registered as an ``atexit`` handler on the owner process so that
     readers can promote when the owner exits cleanly.  Safe to call multiple
@@ -61,6 +62,7 @@ def _cleanup_lock(lock_path: Path, pid: int) -> None:
 
     Args:
         lock_path: Path to the daemon.lock file.
+        socket_path: Path to the daemon.sock file.
         pid: PID of the owner process (us).
     """
     try:
@@ -68,7 +70,12 @@ def _cleanup_lock(lock_path: Path, pid: int) -> None:
             data = json.load(f)
         if data.get("pid") == pid:
             os.unlink(lock_path)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        pass
+    # Always attempt to remove the socket file
+    try:
+        os.unlink(socket_path)
+    except (OSError, TypeError):
         pass
 
 
@@ -90,8 +97,8 @@ class EmbeCodeServer:
 
     On startup the server attempts to acquire ``daemon.lock`` atomically.  The
     first process to succeed becomes the **owner** (read-write DB, indexer,
-    file watcher).  All other processes become **readers** (read-only DB, lock
-    file watcher for promotion).
+    file watcher).  All other processes become **readers** (no DB connection;
+    queries are proxied to the owner via IPC, lock file watcher for promotion).
     """
 
     def __init__(self, project_path: Path) -> None:
@@ -112,8 +119,13 @@ class EmbeCodeServer:
         self.cache_dir = self.cache_manager.get_cache_dir(self.project_path)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Lock file path
+        # Lock file and socket paths
         self.lock_path = self.cache_manager.get_lock_path(self.project_path)
+        self.socket_path = self.cache_manager.get_socket_path(self.project_path)
+
+        # IPC server (owner) and client (reader) — set after role is determined
+        self._ipc_server: IPCServer | None = None
+        self._ipc_client: IPCClient | None = None
 
         # Initialize database (connection opened after role is determined)
         db_path = self.cache_dir / "index.db"
@@ -207,15 +219,19 @@ class EmbeCodeServer:
     # ------------------------------------------------------------------
 
     def _setup_owner(self) -> None:
-        """Set up the owner role: open DB read-write, register cleanup, start indexer."""
-        # Register atexit and signal handlers so the lock is removed on exit
-        atexit.register(_cleanup_lock, self.lock_path, os.getpid())
+        """Set up the owner role: open DB, start IPC server, register cleanup, start indexer."""
+        # Register atexit and signal handlers so the lock + socket are removed on exit
+        atexit.register(_cleanup_lock, self.lock_path, self.socket_path, os.getpid())
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: sys.exit(0))  # triggers atexit
 
         # Open DB read-write and check embedding model compatibility
-        self.db.connect(read_only=False)
+        self.db.connect()
         self._check_embedding_model()
+
+        # Start IPC server so reader processes can proxy queries to us
+        self._ipc_server = IPCServer(self.socket_path, self)
+        self._ipc_server.start()
 
         # Spawn background catch-up thread
         logger.info("Starting catch-up index in background (owner)")
@@ -240,9 +256,19 @@ class EmbeCodeServer:
     # ------------------------------------------------------------------
 
     def _setup_reader(self) -> None:
-        """Set up the reader role: open DB read-only, start lock file watcher."""
-        self.db.connect(read_only=True)
-        logger.info("Reader: connected to index in read-only mode")
+        """Set up the reader role: connect IPC client, start lock file watcher.
+
+        Reader processes do not open DuckDB — they route all queries to the
+        owner via IPC.
+        """
+        logger.info("Reader: skipping DB connection (queries will be proxied via IPC)")
+
+        # Connect to the owner's IPC socket
+        self._ipc_client = IPCClient(self.socket_path)
+        try:
+            self._ipc_client.connect()
+        except ConnectionError:
+            logger.warning("Reader: failed to connect to owner IPC socket — will retry on search")
 
         # Start watching the lock file so we can promote when the owner exits
         self._lock_watcher_stop.clear()
@@ -335,11 +361,18 @@ class EmbeCodeServer:
         """Promote this process from reader to owner.
 
         Steps:
-        1. Attempt atomic lock file creation (another reader may win the race).
-        2. Stop the lock file watcher.
-        3. Close read-only DB connection and reopen read-write.
-        4. Run catch-up indexing and start file watcher.
+        1. Disconnect IPC client (connection is already gone if owner crashed).
+        2. Attempt atomic lock file creation (another reader may win the race).
+        3. Stop the lock file watcher.
+        4. Open DB read-write (readers never hold a DuckDB connection).
+        5. Start IPC server on daemon.sock.
+        6. Run catch-up indexing and start file watcher.
         """
+        # Disconnect IPC client (connection is already gone if owner crashed)
+        if self._ipc_client is not None:
+            self._ipc_client.close()
+            self._ipc_client = None
+
         # Try to atomically claim the lock
         try:
             fd = os.open(
@@ -360,14 +393,19 @@ class EmbeCodeServer:
         # Stop the lock file watcher (no longer needed)
         self._lock_watcher_stop.set()
 
-        # Register cleanup for our new lock
-        atexit.register(_cleanup_lock, self.lock_path, os.getpid())
+        # Register cleanup for our new lock + socket
+        atexit.register(_cleanup_lock, self.lock_path, self.socket_path, os.getpid())
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: sys.exit(0))
 
-        # Transition DB from read-only to read-write
-        self.db.reconnect(read_only=False)
+        # Open DB read-write (readers never open DuckDB, so this is the first
+        # connection for this process)
+        self.db.connect()
         self._check_embedding_model()
+
+        # Start IPC server so reader processes can proxy queries to us
+        self._ipc_server = IPCServer(self.socket_path, self)
+        self._ipc_server.start()
 
         # Run catch-up indexing then start the file watcher
         threading.Thread(target=self._catchup_index, daemon=True).start()
@@ -386,6 +424,10 @@ class EmbeCodeServer:
         """
         Search the codebase using keyword, semantic, or hybrid search.
 
+        If this process is a reader, the request is proxied to the owner via
+        IPC.  If the IPC connection is broken (owner exited), a retriable
+        error is returned.
+
         Args:
             query: Search query string (natural language or code).
             mode: Search mode - "semantic", "keyword", or "hybrid".
@@ -399,6 +441,11 @@ class EmbeCodeServer:
         Raises:
             IndexNotReadyError: If index is still being built.
         """
+        # Reader path: proxy via IPC to the owner
+        if self._role == "reader":
+            return self._proxy_search(query, mode=mode, top_k=top_k, path=path)
+
+        # Owner path: execute locally
         # Mid-reconnect guard (promotion in progress)
         if self.db._conn is None:
             return [
@@ -433,18 +480,74 @@ class EmbeCodeServer:
             else:
                 raise
 
+    def _proxy_search(
+        self,
+        query: str,
+        mode: str = "hybrid",
+        top_k: int = 10,
+        path: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Proxy a search_code request to the owner via IPC.
+
+        Returns a retriable error list if the connection is broken.
+        """
+        if self._ipc_client is None or not self._ipc_client.is_connected:
+            return [
+                {
+                    "error": "Server is reconnecting to the index. Try again in a moment.",
+                    "retry_recommended": True,
+                }
+            ]
+        try:
+            return self._ipc_client.search_code(query=query, mode=mode, top_k=top_k, path=path)
+        except (ConnectionError, RuntimeError):
+            return [
+                {
+                    "error": "Server is reconnecting to the index. Try again in a moment.",
+                    "retry_recommended": True,
+                }
+            ]
+
     def get_index_status(self) -> dict[str, Any]:
         """
         Get current index status.
+
+        If this process is a reader, the request is proxied to the owner via
+        IPC and ``"role": "reader"`` is appended to the response.
 
         Returns:
             Dictionary with files_indexed, total_chunks, embedding_model,
             last_updated, is_indexing, current_file, progress, and role.
         """
+        if self._role == "reader":
+            return self._proxy_index_status()
+
         status = self.indexer.get_status()
         result = status.to_dict()
         result["role"] = self._role
         return result
+
+    def _proxy_index_status(self) -> dict[str, Any]:
+        """Proxy an index_status request to the owner via IPC.
+
+        Appends ``"role": "reader"`` to the owner's response so the caller
+        knows this process is not the owner.  Returns a minimal status dict
+        if the connection is broken.
+        """
+        if self._ipc_client is None or not self._ipc_client.is_connected:
+            return {
+                "role": "reader",
+                "error": "Not connected to owner — try again in a moment.",
+            }
+        try:
+            result = self._ipc_client.index_status()
+            result["role"] = "reader"
+            return result
+        except (ConnectionError, RuntimeError):
+            return {
+                "role": "reader",
+                "error": "Lost connection to owner — try again in a moment.",
+            }
 
     def cleanup(self) -> None:
         """Clean up resources when server shuts down."""
@@ -456,9 +559,17 @@ class EmbeCodeServer:
             self._lock_watcher_stop.set()
             self._lock_watcher_thread.join(timeout=3.0)
 
-        # Remove lock file if we are the owner
+        # Stop IPC server (owner) or disconnect IPC client (reader)
+        if self._ipc_server is not None:
+            self._ipc_server.stop()
+            self._ipc_server = None
+        if self._ipc_client is not None:
+            self._ipc_client.close()
+            self._ipc_client = None
+
+        # Remove lock + socket files if we are the owner
         if self._role == "owner":
-            _cleanup_lock(self.lock_path, os.getpid())
+            _cleanup_lock(self.lock_path, self.socket_path, os.getpid())
 
         self.db.close()
 

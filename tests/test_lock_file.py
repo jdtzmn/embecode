@@ -3,9 +3,8 @@
 Covers:
 - Lock file creation (atomic, first-wins)
 - Stale lock detection (dead PID → cleaned up)
-- Reader role (read-only DB, no indexer/watcher started)
+- Reader role (no DB connection, no indexer/watcher started)
 - Thread safety (concurrent DB operations)
-- DB reconnect (read-only → read-write transition)
 - Cleanup (daemon.lock removed on clean owner shutdown)
 """
 
@@ -35,6 +34,7 @@ def _make_cache_manager_mock(cache_dir: Path) -> Mock:
     cm = Mock()
     cm.get_cache_dir.return_value = cache_dir
     cm.get_lock_path.return_value = cache_dir / "daemon.lock"
+    cm.get_socket_path.return_value = cache_dir / "daemon.sock"
     cm.update_access_time.return_value = None
     return cm
 
@@ -53,8 +53,7 @@ def _make_db_mock(stored_model: str | None = None) -> Mock:
     db.set_metadata.return_value = None
     db.connect.return_value = None
     db.close.return_value = None
-    db.reconnect.return_value = None
-    db._conn = object()  # non-None so mid-reconnect guard passes
+    db._conn = object()  # non-None so mid-promotion guard passes
     return db
 
 
@@ -107,32 +106,48 @@ class TestCleanupLock:
 
     def test_removes_lock_when_pid_matches(self, tmp_path: Path) -> None:
         lock_path = tmp_path / "daemon.lock"
+        socket_path = tmp_path / "daemon.sock"
         pid = os.getpid()
         lock_path.write_text(json.dumps({"pid": pid}))
 
-        _cleanup_lock(lock_path, pid)
+        _cleanup_lock(lock_path, socket_path, pid)
 
         assert not lock_path.exists()
 
+    def test_removes_socket_file(self, tmp_path: Path) -> None:
+        lock_path = tmp_path / "daemon.lock"
+        socket_path = tmp_path / "daemon.sock"
+        pid = os.getpid()
+        lock_path.write_text(json.dumps({"pid": pid}))
+        socket_path.write_text("")  # simulate leftover socket file
+
+        _cleanup_lock(lock_path, socket_path, pid)
+
+        assert not lock_path.exists()
+        assert not socket_path.exists()
+
     def test_does_not_remove_when_pid_differs(self, tmp_path: Path) -> None:
         lock_path = tmp_path / "daemon.lock"
+        socket_path = tmp_path / "daemon.sock"
         other_pid = os.getpid() + 1  # just a different number
         lock_path.write_text(json.dumps({"pid": other_pid}))
 
-        _cleanup_lock(lock_path, os.getpid())
+        _cleanup_lock(lock_path, socket_path, os.getpid())
 
         assert lock_path.exists()
 
     def test_safe_when_lock_missing(self, tmp_path: Path) -> None:
         lock_path = tmp_path / "nonexistent.lock"
+        socket_path = tmp_path / "nonexistent.sock"
         # Should not raise
-        _cleanup_lock(lock_path, os.getpid())
+        _cleanup_lock(lock_path, socket_path, os.getpid())
 
     def test_safe_when_lock_corrupt(self, tmp_path: Path) -> None:
         lock_path = tmp_path / "daemon.lock"
+        socket_path = tmp_path / "daemon.sock"
         lock_path.write_text("not-json")
         # Should not raise
-        _cleanup_lock(lock_path, os.getpid())
+        _cleanup_lock(lock_path, socket_path, os.getpid())
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +158,7 @@ class TestCleanupLock:
 class TestLockAcquisitionOwner:
     """First process creates lock file and becomes owner."""
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -159,6 +175,7 @@ class TestLockAcquisitionOwner:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -170,6 +187,7 @@ class TestLockAcquisitionOwner:
 
         assert server._role == "owner"
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -186,6 +204,7 @@ class TestLockAcquisitionOwner:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -200,6 +219,7 @@ class TestLockAcquisitionOwner:
         data = json.loads(lock_path.read_text())
         assert data["pid"] == os.getpid()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -216,6 +236,7 @@ class TestLockAcquisitionOwner:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -226,8 +247,9 @@ class TestLockAcquisitionOwner:
 
         EmbeCodeServer(temp_project)
 
-        db_mock.connect.assert_called_once_with(read_only=False)
+        db_mock.connect.assert_called_once_with()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -244,6 +266,7 @@ class TestLockAcquisitionOwner:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -258,6 +281,42 @@ class TestLockAcquisitionOwner:
         calls = mock_thread.call_args_list
         assert any(c.kwargs.get("daemon") is True for c in calls)
 
+    @patch("embecode.server.IPCServer")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    def test_owner_starts_ipc_server(
+        self,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
+        temp_project: Path,
+        temp_cache_dir: Path,
+    ) -> None:
+        """Owner must start the IPC server on daemon.sock."""
+        mock_load_config.return_value = _make_config_mock()
+        mock_cm_cls.return_value = _make_cache_manager_mock(temp_cache_dir)
+        mock_db_cls.return_value = _make_db_mock()
+
+        server = EmbeCodeServer(temp_project)
+
+        # IPCServer should have been instantiated with the socket path
+        mock_ipc_server_cls.assert_called_once_with(
+            temp_cache_dir / "daemon.sock",
+            server,
+        )
+        # start() should have been called
+        mock_ipc_server_cls.return_value.start.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Lock file acquisition — reader path
@@ -271,6 +330,7 @@ class TestLockAcquisitionReader:
         lock_path = cache_dir / "daemon.lock"
         lock_path.write_text(json.dumps({"pid": pid}))
 
+    @patch("embecode.server.IPCClient")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -289,6 +349,7 @@ class TestLockAcquisitionReader:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -303,6 +364,7 @@ class TestLockAcquisitionReader:
 
         assert server._role == "reader"
 
+    @patch("embecode.server.IPCClient")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -311,7 +373,7 @@ class TestLockAcquisitionReader:
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.load_config")
     @patch("embecode.server.is_pid_alive", return_value=True)
-    def test_reader_opens_db_read_only(
+    def test_reader_does_not_open_db(
         self,
         mock_is_alive: Mock,
         mock_load_config: Mock,
@@ -321,9 +383,11 @@ class TestLockAcquisitionReader:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
+        """Reader must not open DuckDB — queries are proxied via IPC."""
         self._write_lock(temp_cache_dir, pid=12345)
 
         mock_load_config.return_value = _make_config_mock()
@@ -333,8 +397,9 @@ class TestLockAcquisitionReader:
 
         EmbeCodeServer(temp_project)
 
-        db_mock.connect.assert_called_once_with(read_only=True)
+        db_mock.connect.assert_not_called()
 
+    @patch("embecode.server.IPCClient")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -353,6 +418,7 @@ class TestLockAcquisitionReader:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -372,6 +438,7 @@ class TestLockAcquisitionReader:
         # Watcher must not be set on the reader
         assert server.watcher is None
 
+    @patch("embecode.server.IPCClient")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -390,6 +457,7 @@ class TestLockAcquisitionReader:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -406,6 +474,43 @@ class TestLockAcquisitionReader:
         thread_names = [c.kwargs.get("name") for c in mock_thread.call_args_list]
         assert "LockFileWatcher" in thread_names
 
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_connects_ipc_client(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        temp_cache_dir: Path,
+    ) -> None:
+        """Reader must connect IPC client to the owner's socket."""
+        self._write_lock(temp_cache_dir, pid=12345)
+
+        mock_load_config.return_value = _make_config_mock()
+        mock_cm_cls.return_value = _make_cache_manager_mock(temp_cache_dir)
+        mock_db_cls.return_value = _make_db_mock()
+
+        EmbeCodeServer(temp_project)
+
+        # IPCClient should have been instantiated with the socket path
+        mock_ipc_client_cls.assert_called_once_with(temp_cache_dir / "daemon.sock")
+        # connect() should have been called
+        mock_ipc_client_cls.return_value.connect.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # Stale lock detection
@@ -419,6 +524,7 @@ class TestStaleLockDetection:
         lock_path = cache_dir / "daemon.lock"
         lock_path.write_text(json.dumps({"pid": pid}))
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -437,6 +543,7 @@ class TestStaleLockDetection:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -452,6 +559,7 @@ class TestStaleLockDetection:
         # Must have claimed ownership after removing stale lock
         assert server._role == "owner"
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -470,6 +578,7 @@ class TestStaleLockDetection:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -528,6 +637,7 @@ class TestRoleInIndexStatus:
 
         return None  # defer actual creation to individual tests
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -544,6 +654,7 @@ class TestRoleInIndexStatus:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -567,6 +678,7 @@ class TestRoleInIndexStatus:
 
         assert result["role"] == "owner"
 
+    @patch("embecode.server.IPCClient")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -585,6 +697,7 @@ class TestRoleInIndexStatus:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -607,6 +720,10 @@ class TestRoleInIndexStatus:
         )
         mock_indexer_cls.return_value.get_status.return_value = status
 
+        # Mock IPC client to return a status dict
+        mock_ipc_client_cls.return_value.index_status.return_value = status.to_dict()
+        mock_ipc_client_cls.return_value.is_connected = True
+
         server = EmbeCodeServer(temp_project)
         result = server.get_index_status()
 
@@ -619,8 +736,9 @@ class TestRoleInIndexStatus:
 
 
 class TestOwnerCleanup:
-    """Owner removes daemon.lock on cleanup()."""
+    """Owner removes daemon.lock and daemon.sock on cleanup()."""
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -637,6 +755,7 @@ class TestOwnerCleanup:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -653,6 +772,39 @@ class TestOwnerCleanup:
 
         assert not lock_path.exists(), "Lock must be removed after cleanup()"
 
+    @patch("embecode.server.IPCServer")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    def test_cleanup_stops_ipc_server(
+        self,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
+        temp_project: Path,
+        temp_cache_dir: Path,
+    ) -> None:
+        """Owner cleanup must stop the IPC server."""
+        mock_load_config.return_value = _make_config_mock()
+        mock_cm_cls.return_value = _make_cache_manager_mock(temp_cache_dir)
+        mock_db_cls.return_value = _make_db_mock()
+
+        server = EmbeCodeServer(temp_project)
+        server.cleanup()
+
+        # IPC server's stop() must have been called
+        mock_ipc_server_cls.return_value.stop.assert_called_once()
+
+    @patch("embecode.server.IPCClient")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -671,6 +823,7 @@ class TestOwnerCleanup:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -690,6 +843,45 @@ class TestOwnerCleanup:
         # Lock must still exist (owned by PID 12345, not us)
         assert lock_path.exists()
 
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_cleanup_disconnects_ipc_client(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        temp_cache_dir: Path,
+    ) -> None:
+        """Reader cleanup must disconnect the IPC client."""
+        lock_path = temp_cache_dir / "daemon.lock"
+        lock_path.write_text(json.dumps({"pid": 12345}))
+
+        mock_load_config.return_value = _make_config_mock()
+        mock_cm_cls.return_value = _make_cache_manager_mock(temp_cache_dir)
+        mock_db_cls.return_value = _make_db_mock()
+
+        server = EmbeCodeServer(temp_project)
+        assert server._role == "reader"
+
+        server.cleanup()
+
+        # IPC client's close() must have been called
+        mock_ipc_client_cls.return_value.close.assert_called()
+
 
 # ---------------------------------------------------------------------------
 # Search mid-reconnect guard
@@ -699,6 +891,7 @@ class TestOwnerCleanup:
 class TestMidReconnectGuard:
     """search_code() returns a retriable error while DB connection is None."""
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
     @patch("embecode.server.Searcher")
@@ -715,6 +908,7 @@ class TestMidReconnectGuard:
         mock_searcher_cls: Mock,
         mock_indexer_cls: Mock,
         mock_thread: Mock,
+        mock_ipc_server_cls: Mock,
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
@@ -736,66 +930,6 @@ class TestMidReconnectGuard:
 
 
 # ---------------------------------------------------------------------------
-# DB reconnect: read-only → read-write
-# ---------------------------------------------------------------------------
-
-
-class TestDatabaseReconnect:
-    """Database.reconnect() transitions between modes correctly."""
-
-    def test_reconnect_closes_and_reopens_read_write(self, tmp_path: Path) -> None:
-        from embecode.db import Database
-
-        db_path = tmp_path / "test.db"
-        db = Database(db_path)
-        db.connect(read_only=False)
-
-        assert db.is_read_only is False
-        assert db._conn is not None
-
-        # Reconnect — same mode
-        db.reconnect(read_only=False)
-
-        assert db._conn is not None
-        assert db.is_read_only is False
-        db.close()
-
-    def test_reconnect_idempotent_when_conn_already_none(self, tmp_path: Path) -> None:
-        """reconnect() must not crash if called on an unconnected Database."""
-        from embecode.db import Database
-
-        db_path = tmp_path / "test2.db"
-        db = Database(db_path)
-
-        # No connect() called yet — _conn is None
-        # reconnect() should still work (opens fresh connection)
-        db.reconnect(read_only=False)
-
-        assert db._conn is not None
-        assert db.is_read_only is False
-        db.close()
-
-    def test_is_read_only_property_reflects_mode(self, tmp_path: Path) -> None:
-        from embecode.db import Database
-
-        db_path = tmp_path / "test3.db"
-        db = Database(db_path)
-
-        db.connect(read_only=False)
-        assert db.is_read_only is False
-
-        # Close and reopen as read-only  (need a second connection from same process?
-        # DuckDB read-only requires the file to exist already from the first open)
-        db.close()
-
-        # Re-open as read-only (file already exists)
-        db.connect(read_only=True)
-        assert db.is_read_only is True
-
-        db.close()
-
-
-# ---------------------------------------------------------------------------
 # Thread safety: concurrent DB operations
 # ---------------------------------------------------------------------------
 
@@ -809,7 +943,7 @@ class TestDatabaseThreadSafety:
 
         db_path = tmp_path / "concurrent.db"
         db = Database(db_path)
-        db.connect(read_only=False)
+        db.connect()
 
         errors: list[Exception] = []
 
@@ -849,7 +983,7 @@ class TestDatabaseThreadSafety:
 
         db_path = tmp_path / "rw_concurrent.db"
         db = Database(db_path)
-        db.connect(read_only=False)
+        db.connect()
 
         # Pre-populate
         db.insert_chunks(

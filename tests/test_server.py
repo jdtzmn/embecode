@@ -86,6 +86,7 @@ def mock_searcher() -> Mock:
 class TestEmbeCodeServer:
     """Tests for EmbeCodeServer class."""
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -102,6 +103,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -114,6 +116,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 0}
@@ -136,6 +139,7 @@ class TestEmbeCodeServer:
         _args, kwargs = mock_thread.call_args
         assert kwargs["daemon"] is True
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -152,6 +156,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -166,6 +171,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -180,6 +186,7 @@ class TestEmbeCodeServer:
         _args, kwargs = mock_thread.call_args
         assert kwargs["daemon"] is True
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -196,6 +203,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -209,6 +217,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -225,8 +234,7 @@ class TestEmbeCodeServer:
             score=0.95,
         )
         mock_searcher.search.return_value = SearchResponse(
-            results=[result],
-            timings=SearchTimings(),
+            results=[result], timings=SearchTimings()
         )
         mock_searcher_class.return_value = mock_searcher
 
@@ -246,6 +254,7 @@ class TestEmbeCodeServer:
             "hello function", mode="semantic", top_k=5, path=None
         )
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -262,6 +271,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -276,6 +286,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 0}
@@ -305,6 +316,7 @@ class TestEmbeCodeServer:
         with pytest.raises(IndexNotReadyError, match=r"5 files processed.*25% complete"):
             server.search_code("test query")
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -321,6 +333,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -334,6 +347,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -362,6 +376,7 @@ class TestEmbeCodeServer:
         assert result["embedding_model"] == "test-model"
         assert result["is_indexing"] is False
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -380,6 +395,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -394,6 +410,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -415,6 +432,7 @@ class TestEmbeCodeServer:
         mock_watcher.stop.assert_called_once()
         mock_db.close.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -431,6 +449,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -444,15 +463,13 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
         mock_db_class.return_value = mock_db
 
-        mock_searcher.search.return_value = SearchResponse(
-            results=[],
-            timings=SearchTimings(),
-        )
+        mock_searcher.search.return_value = SearchResponse(results=[], timings=SearchTimings())
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server
@@ -464,6 +481,7 @@ class TestEmbeCodeServer:
         # Verify path was passed to searcher
         mock_searcher.search.assert_called_once_with("test", mode="hybrid", top_k=10, path="src/")
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -480,15 +498,13 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
         mock_searcher: Mock,
     ) -> None:
-        """Test search_code returns concise format with required keys, no content field.
-
-        Allows optional fields like match_lines and file_result_count.
-        """
+        """Test search_code returns concise format with all expected keys and no content field."""
         # Setup mocks
         mock_config_class.load.return_value = mock_config
         mock_cache_manager = Mock()
@@ -496,6 +512,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -512,8 +529,7 @@ class TestEmbeCodeServer:
             score=0.95,
         )
         mock_searcher.search.return_value = SearchResponse(
-            results=[result],
-            timings=SearchTimings(),
+            results=[result], timings=SearchTimings()
         )
         mock_searcher_class.return_value = mock_searcher
 
@@ -521,8 +537,8 @@ class TestEmbeCodeServer:
         server = EmbeCodeServer(temp_project)
         results = server.search_code("hello function")
 
-        # Verify all required keys are present
-        required_keys = {
+        # Verify all expected keys are present
+        expected_keys = {
             "file_path",
             "language",
             "start_line",
@@ -530,14 +546,14 @@ class TestEmbeCodeServer:
             "definitions",
             "preview",
             "score",
+            "match_lines",
         }
-        optional_keys = {"match_lines", "file_result_count"}
-        assert required_keys <= set(results[0].keys())
-        assert set(results[0].keys()) <= required_keys | optional_keys
+        assert set(results[0].keys()) == expected_keys
 
         # Verify content field is excluded (concise format)
         assert "content" not in results[0]
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.EmbeCodeConfig")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -554,6 +570,7 @@ class TestEmbeCodeServer:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_config_class: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -567,6 +584,7 @@ class TestEmbeCodeServer:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -586,8 +604,7 @@ class TestEmbeCodeServer:
             for i in range(10)
         ]
         mock_searcher.search.return_value = SearchResponse(
-            results=mock_results,
-            timings=SearchTimings(),
+            results=mock_results, timings=SearchTimings()
         )
         mock_searcher_class.return_value = mock_searcher
 
@@ -603,218 +620,11 @@ class TestEmbeCodeServer:
         # Verify all 10 results are returned
         assert len(results) == 10
 
-    @patch("embecode.server.EmbeCodeConfig")
-    @patch("embecode.server.CacheManager")
-    @patch("embecode.server.Database")
-    @patch("embecode.server.Embedder")
-    @patch("embecode.server.Searcher")
-    @patch("embecode.server.Indexer")
-    @patch("embecode.server.threading.Thread")
-    def test_search_code_file_result_count_for_duplicates(
-        self,
-        mock_thread: Mock,
-        mock_indexer_class: Mock,
-        mock_searcher_class: Mock,
-        mock_embedder_class: Mock,
-        mock_db_class: Mock,
-        mock_cache_manager_class: Mock,
-        mock_config_class: Mock,
-        temp_project: Path,
-        mock_config: Mock,
-        mock_db: Mock,
-        mock_searcher: Mock,
-    ) -> None:
-        """Two results from same file get file_result_count, unique file result does not."""
-        mock_config_class.load.return_value = mock_config
-        mock_cache_manager = Mock()
-        cache_dir = temp_project / ".cache"
-        cache_dir.mkdir()
-        mock_cache_manager.get_cache_dir.return_value = cache_dir
-        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
-        mock_cache_manager_class.return_value = mock_cache_manager
-
-        mock_db.get_index_stats.return_value = {"total_chunks": 100}
-        mock_db_class.return_value = mock_db
-
-        # Two results from auth.py, one from main.py
-        results_list = [
-            ChunkResult(
-                content="def login():\n    pass",
-                file_path="src/auth.py",
-                language="python",
-                start_line=1,
-                end_line=5,
-                definitions="function login",
-                score=0.9,
-            ),
-            ChunkResult(
-                content="def logout():\n    pass",
-                file_path="src/auth.py",
-                language="python",
-                start_line=10,
-                end_line=15,
-                definitions="function logout",
-                score=0.8,
-            ),
-            ChunkResult(
-                content="def main():\n    pass",
-                file_path="src/main.py",
-                language="python",
-                start_line=1,
-                end_line=3,
-                definitions="function main",
-                score=0.7,
-            ),
-        ]
-        mock_searcher.search.return_value = SearchResponse(
-            results=results_list,
-            timings=SearchTimings(),
-        )
-        mock_searcher_class.return_value = mock_searcher
-
-        server = EmbeCodeServer(temp_project)
-        results = server.search_code("auth functions")
-
-        # Both auth.py results should have file_result_count: 2
-        assert results[0]["file_path"] == "src/auth.py"
-        assert results[0]["file_result_count"] == 2
-        assert results[1]["file_path"] == "src/auth.py"
-        assert results[1]["file_result_count"] == 2
-
-        # main.py result should NOT have file_result_count
-        assert results[2]["file_path"] == "src/main.py"
-        assert "file_result_count" not in results[2]
-
-    @patch("embecode.server.EmbeCodeConfig")
-    @patch("embecode.server.CacheManager")
-    @patch("embecode.server.Database")
-    @patch("embecode.server.Embedder")
-    @patch("embecode.server.Searcher")
-    @patch("embecode.server.Indexer")
-    @patch("embecode.server.threading.Thread")
-    def test_search_code_file_result_count_absent_for_unique_files(
-        self,
-        mock_thread: Mock,
-        mock_indexer_class: Mock,
-        mock_searcher_class: Mock,
-        mock_embedder_class: Mock,
-        mock_db_class: Mock,
-        mock_cache_manager_class: Mock,
-        mock_config_class: Mock,
-        temp_project: Path,
-        mock_config: Mock,
-        mock_db: Mock,
-        mock_searcher: Mock,
-    ) -> None:
-        """When all results are from different files, no result has file_result_count."""
-        mock_config_class.load.return_value = mock_config
-        mock_cache_manager = Mock()
-        cache_dir = temp_project / ".cache"
-        cache_dir.mkdir()
-        mock_cache_manager.get_cache_dir.return_value = cache_dir
-        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
-        mock_cache_manager_class.return_value = mock_cache_manager
-
-        mock_db.get_index_stats.return_value = {"total_chunks": 100}
-        mock_db_class.return_value = mock_db
-
-        results_list = [
-            ChunkResult(
-                content="def foo():\n    pass",
-                file_path="a.py",
-                language="python",
-                start_line=1,
-                end_line=2,
-                definitions="function foo",
-                score=0.9,
-            ),
-            ChunkResult(
-                content="def bar():\n    pass",
-                file_path="b.py",
-                language="python",
-                start_line=1,
-                end_line=2,
-                definitions="function bar",
-                score=0.8,
-            ),
-        ]
-        mock_searcher.search.return_value = SearchResponse(
-            results=results_list,
-            timings=SearchTimings(),
-        )
-        mock_searcher_class.return_value = mock_searcher
-
-        server = EmbeCodeServer(temp_project)
-        results = server.search_code("functions")
-
-        for r in results:
-            assert "file_result_count" not in r
-
-    @patch("embecode.server.EmbeCodeConfig")
-    @patch("embecode.server.CacheManager")
-    @patch("embecode.server.Database")
-    @patch("embecode.server.Embedder")
-    @patch("embecode.server.Searcher")
-    @patch("embecode.server.Indexer")
-    @patch("embecode.server.threading.Thread")
-    def test_search_code_passes_query_to_to_dict(
-        self,
-        mock_thread: Mock,
-        mock_indexer_class: Mock,
-        mock_searcher_class: Mock,
-        mock_embedder_class: Mock,
-        mock_db_class: Mock,
-        mock_cache_manager_class: Mock,
-        mock_config_class: Mock,
-        temp_project: Path,
-        mock_config: Mock,
-        mock_db: Mock,
-        mock_searcher: Mock,
-    ) -> None:
-        """Verify the query string flows through from search_code to to_dict."""
-        mock_config_class.load.return_value = mock_config
-        mock_cache_manager = Mock()
-        cache_dir = temp_project / ".cache"
-        cache_dir.mkdir()
-        mock_cache_manager.get_cache_dir.return_value = cache_dir
-        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
-        mock_cache_manager_class.return_value = mock_cache_manager
-
-        mock_db.get_index_stats.return_value = {"total_chunks": 100}
-        mock_db_class.return_value = mock_db
-
-        # Use a real ChunkResult with content that matches the query
-        result = ChunkResult(
-            content="import os\nimport sys\ndef hello():\n    print('hello world')",
-            file_path="main.py",
-            language="python",
-            start_line=1,
-            end_line=4,
-            definitions="function hello",
-            score=0.95,
-        )
-        mock_searcher.search.return_value = SearchResponse(
-            results=[result],
-            timings=SearchTimings(),
-        )
-        mock_searcher_class.return_value = mock_searcher
-
-        server = EmbeCodeServer(temp_project)
-        results = server.search_code("hello")
-
-        # Query "hello" matches line 3 and line 4, so match_lines should be present
-        assert "match_lines" in results[0]
-        assert 3 in results[0]["match_lines"]  # "def hello():"
-        assert 4 in results[0]["match_lines"]  # "print('hello world')"
-
-        # Preview should be match-aware (showing hello lines, not import lines)
-        preview = results[0]["preview"]
-        assert "hello" in preview
-
 
 class TestCatchUpStartup:
     """Tests for catch-up indexing startup logic and embedding model detection."""
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -831,6 +641,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -842,6 +653,7 @@ class TestCatchUpStartup:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Test with empty DB
@@ -856,6 +668,7 @@ class TestCatchUpStartup:
         EmbeCodeServer(temp_project)
         assert mock_thread.call_count == 1
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -874,6 +687,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -886,6 +700,7 @@ class TestCatchUpStartup:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
         mock_db_class.return_value = mock_db
 
@@ -900,6 +715,7 @@ class TestCatchUpStartup:
         # Now watcher should be started
         mock_watcher_class.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -918,6 +734,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -930,6 +747,7 @@ class TestCatchUpStartup:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
         mock_db_class.return_value = mock_db
 
@@ -945,6 +763,7 @@ class TestCatchUpStartup:
         # Watcher should still be started despite the failure
         mock_watcher_class.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -961,6 +780,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -972,6 +792,7 @@ class TestCatchUpStartup:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Stored model matches configured model
@@ -985,6 +806,7 @@ class TestCatchUpStartup:
         # set_metadata should NOT be called (model already stored and matches)
         mock_db.set_metadata.assert_not_called()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -1001,6 +823,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -1012,6 +835,7 @@ class TestCatchUpStartup:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Stored model differs from configured model ("test-model")
@@ -1029,6 +853,7 @@ class TestCatchUpStartup:
         # Thread should NOT have been started
         mock_thread.assert_not_called()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -1045,6 +870,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -1056,6 +882,7 @@ class TestCatchUpStartup:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # No stored model (first run)
@@ -1071,6 +898,7 @@ class TestCatchUpStartup:
         # Catch-up thread should still be spawned
         mock_thread.assert_called_once()
 
+    @patch("embecode.server.IPCServer")
     @patch("embecode.server.load_config")
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.Database")
@@ -1087,6 +915,7 @@ class TestCatchUpStartup:
         mock_db_class: Mock,
         mock_cache_manager_class: Mock,
         mock_load_config: Mock,
+        mock_ipc_server_class: Mock,
         temp_project: Path,
         mock_config: Mock,
         mock_db: Mock,
@@ -1098,6 +927,7 @@ class TestCatchUpStartup:
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
         mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
+        mock_cache_manager.get_socket_path.return_value = cache_dir / "daemon.sock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Track call order
@@ -1312,3 +1142,305 @@ class TestRunServer:
             run_server(temp_project)
 
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# Reader proxy behaviour
+# ---------------------------------------------------------------------------
+
+
+def _make_reader_cache_manager(cache_dir: Path) -> Mock:
+    """Return a CacheManager mock whose helpers point at *cache_dir*."""
+    cm = Mock()
+    cm.get_cache_dir.return_value = cache_dir
+    cm.get_lock_path.return_value = cache_dir / "daemon.lock"
+    cm.get_socket_path.return_value = cache_dir / "daemon.sock"
+    cm.update_access_time.return_value = None
+    return cm
+
+
+def _write_owner_lock(cache_dir: Path, pid: int = 12345) -> None:
+    """Write a lock file claiming *pid* as the owner."""
+    import json
+
+    lock_path = cache_dir / "daemon.lock"
+    lock_path.write_text(json.dumps({"pid": pid}))
+
+
+class TestReaderSearchProxy:
+    """Reader process proxies search_code() calls to the owner via IPC."""
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_search_proxies_via_ipc(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Reader search_code calls IPC client and returns the owner's results."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        expected = [{"file_path": "a.py", "score": 0.9}]
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.search_code.return_value = expected
+
+        server = EmbeCodeServer(temp_project)
+        assert server._role == "reader"
+
+        results = server.search_code("hello", mode="semantic", top_k=5, path="src/")
+
+        assert results == expected
+        ipc_client.search_code.assert_called_once_with(
+            query="hello", mode="semantic", top_k=5, path="src/"
+        )
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_search_disconnected_returns_retriable_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC client is not connected, reader returns a retriable error."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = False  # not connected
+
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("hello")
+
+        assert len(results) == 1
+        assert results[0]["retry_recommended"] is True
+        assert "error" in results[0]
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_search_connection_error_returns_retriable_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC connection drops during search, reader returns retriable error."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.search_code.side_effect = ConnectionError("pipe broken")
+
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("hello")
+
+        assert len(results) == 1
+        assert results[0]["retry_recommended"] is True
+        assert "error" in results[0]
+
+
+class TestReaderIndexStatusProxy:
+    """Reader process proxies get_index_status() calls to the owner via IPC."""
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_index_status_proxies_via_ipc(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Reader get_index_status calls IPC client and appends role=reader."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        owner_status = {
+            "files_indexed": 42,
+            "total_chunks": 200,
+            "embedding_model": "test-model",
+            "is_indexing": False,
+        }
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.index_status.return_value = dict(owner_status)
+
+        server = EmbeCodeServer(temp_project)
+        result = server.get_index_status()
+
+        assert result["files_indexed"] == 42
+        assert result["total_chunks"] == 200
+        assert result["role"] == "reader"
+        ipc_client.index_status.assert_called_once()
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_index_status_disconnected_returns_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC client is not connected, reader returns error with role=reader."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = False
+
+        server = EmbeCodeServer(temp_project)
+        result = server.get_index_status()
+
+        assert result["role"] == "reader"
+        assert "error" in result
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_index_status_connection_error_returns_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC connection drops during index_status, reader returns error."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.index_status.side_effect = ConnectionError("owner gone")
+
+        server = EmbeCodeServer(temp_project)
+        result = server.get_index_status()
+
+        assert result["role"] == "reader"
+        assert "error" in result
