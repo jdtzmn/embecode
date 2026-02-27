@@ -14,9 +14,10 @@ from embecode.config import load_config
 from embecode.indexer import Indexer
 from embecode.searcher import ChunkResult, IndexNotReadyError, Searcher
 from embecode.watcher import Watcher
+from tests.helpers.mocks import MockEmbedder
 
 # ============================================================================
-# Mock Database and Embedder for Integration Tests
+# Mock Database for Integration Tests
 # ============================================================================
 
 
@@ -155,27 +156,6 @@ class MockDatabase:
                     }
                 )
         return results[:top_k]
-
-
-class MockEmbedder:
-    """Mock embedder for integration testing."""
-
-    def __init__(self, dimension: int = 384) -> None:
-        """Initialize mock embedder."""
-        self._dimension = dimension
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """Generate mock embeddings."""
-        return [[0.1] * self._dimension for _ in texts]
-
-    def unload(self) -> None:
-        """Release the loaded model from memory (no-op for mock)."""
-        pass
-
-    @property
-    def dimension(self) -> int:
-        """Get embedding dimension."""
-        return self._dimension
 
 
 # ============================================================================
