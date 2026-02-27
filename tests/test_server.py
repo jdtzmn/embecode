@@ -8,7 +8,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from embecode.indexer import IndexStatus
-from embecode.searcher import ChunkResult, IndexNotReadyError
+from embecode.searcher import ChunkResult, IndexNotReadyError, SearchResponse, SearchTimings
 from embecode.server import (
     EmbeCodeServer,
     EmbeddingModelChangedError,
@@ -472,7 +472,10 @@ class TestEmbeCodeServer:
         mock_db: Mock,
         mock_searcher: Mock,
     ) -> None:
-        """Test search_code returns concise format with all expected keys and no content field."""
+        """Test search_code returns concise format with required keys, no content field.
+
+        Allows optional fields like match_lines and file_result_count.
+        """
         # Setup mocks
         mock_config_class.load.return_value = mock_config
         mock_cache_manager = Mock()
@@ -494,15 +497,18 @@ class TestEmbeCodeServer:
             definitions="function hello",
             score=0.95,
         )
-        mock_searcher.search.return_value = [result]
+        mock_searcher.search.return_value = SearchResponse(
+            results=[result],
+            timings=SearchTimings(),
+        )
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server and search
         server = EmbeCodeServer(temp_project)
         results = server.search_code("hello function")
 
-        # Verify all expected keys are present
-        expected_keys = {
+        # Verify all required keys are present
+        required_keys = {
             "file_path",
             "language",
             "start_line",
@@ -511,7 +517,9 @@ class TestEmbeCodeServer:
             "preview",
             "score",
         }
-        assert set(results[0].keys()) == expected_keys
+        optional_keys = {"match_lines", "file_result_count"}
+        assert required_keys <= set(results[0].keys())
+        assert set(results[0].keys()) <= required_keys | optional_keys
 
         # Verify content field is excluded (concise format)
         assert "content" not in results[0]
@@ -576,6 +584,211 @@ class TestEmbeCodeServer:
 
         # Verify all 10 results are returned
         assert len(results) == 10
+
+    @patch("embecode.server.EmbeCodeConfig")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_search_code_file_result_count_for_duplicates(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_config_class: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+        mock_searcher: Mock,
+    ) -> None:
+        """Two results from same file get file_result_count, unique file result does not."""
+        mock_config_class.load.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        mock_db.get_index_stats.return_value = {"total_chunks": 100}
+        mock_db_class.return_value = mock_db
+
+        # Two results from auth.py, one from main.py
+        results_list = [
+            ChunkResult(
+                content="def login():\n    pass",
+                file_path="src/auth.py",
+                language="python",
+                start_line=1,
+                end_line=5,
+                definitions="function login",
+                score=0.9,
+            ),
+            ChunkResult(
+                content="def logout():\n    pass",
+                file_path="src/auth.py",
+                language="python",
+                start_line=10,
+                end_line=15,
+                definitions="function logout",
+                score=0.8,
+            ),
+            ChunkResult(
+                content="def main():\n    pass",
+                file_path="src/main.py",
+                language="python",
+                start_line=1,
+                end_line=3,
+                definitions="function main",
+                score=0.7,
+            ),
+        ]
+        mock_searcher.search.return_value = SearchResponse(
+            results=results_list,
+            timings=SearchTimings(),
+        )
+        mock_searcher_class.return_value = mock_searcher
+
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("auth functions")
+
+        # Both auth.py results should have file_result_count: 2
+        assert results[0]["file_path"] == "src/auth.py"
+        assert results[0]["file_result_count"] == 2
+        assert results[1]["file_path"] == "src/auth.py"
+        assert results[1]["file_result_count"] == 2
+
+        # main.py result should NOT have file_result_count
+        assert results[2]["file_path"] == "src/main.py"
+        assert "file_result_count" not in results[2]
+
+    @patch("embecode.server.EmbeCodeConfig")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_search_code_file_result_count_absent_for_unique_files(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_config_class: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+        mock_searcher: Mock,
+    ) -> None:
+        """When all results are from different files, no result has file_result_count."""
+        mock_config_class.load.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        mock_db.get_index_stats.return_value = {"total_chunks": 100}
+        mock_db_class.return_value = mock_db
+
+        results_list = [
+            ChunkResult(
+                content="def foo():\n    pass",
+                file_path="a.py",
+                language="python",
+                start_line=1,
+                end_line=2,
+                definitions="function foo",
+                score=0.9,
+            ),
+            ChunkResult(
+                content="def bar():\n    pass",
+                file_path="b.py",
+                language="python",
+                start_line=1,
+                end_line=2,
+                definitions="function bar",
+                score=0.8,
+            ),
+        ]
+        mock_searcher.search.return_value = SearchResponse(
+            results=results_list,
+            timings=SearchTimings(),
+        )
+        mock_searcher_class.return_value = mock_searcher
+
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("functions")
+
+        for r in results:
+            assert "file_result_count" not in r
+
+    @patch("embecode.server.EmbeCodeConfig")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.threading.Thread")
+    def test_search_code_passes_query_to_to_dict(
+        self,
+        mock_thread: Mock,
+        mock_indexer_class: Mock,
+        mock_searcher_class: Mock,
+        mock_embedder_class: Mock,
+        mock_db_class: Mock,
+        mock_cache_manager_class: Mock,
+        mock_config_class: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+        mock_searcher: Mock,
+    ) -> None:
+        """Verify the query string flows through from search_code to to_dict."""
+        mock_config_class.load.return_value = mock_config
+        mock_cache_manager = Mock()
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager_class.return_value = mock_cache_manager
+
+        mock_db.get_index_stats.return_value = {"total_chunks": 100}
+        mock_db_class.return_value = mock_db
+
+        # Use a real ChunkResult with content that matches the query
+        result = ChunkResult(
+            content="import os\nimport sys\ndef hello():\n    print('hello world')",
+            file_path="main.py",
+            language="python",
+            start_line=1,
+            end_line=4,
+            definitions="function hello",
+            score=0.95,
+        )
+        mock_searcher.search.return_value = SearchResponse(
+            results=[result],
+            timings=SearchTimings(),
+        )
+        mock_searcher_class.return_value = mock_searcher
+
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("hello")
+
+        # Query "hello" matches line 3 and line 4, so match_lines should be present
+        assert "match_lines" in results[0]
+        assert 3 in results[0]["match_lines"]  # "def hello():"
+        assert 4 in results[0]["match_lines"]  # "print('hello world')"
+
+        # Preview should be match-aware (showing hello lines, not import lines)
+        preview = results[0]["preview"]
+        assert "hello" in preview
 
 
 class TestCatchUpStartup:
