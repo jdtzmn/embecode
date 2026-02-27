@@ -18,9 +18,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+import duckdb
 import pytest
 
-from embecode.config import EmbeCodeConfig, load_config
+from embecode.config import load_config
 from embecode.db import Database
 from embecode.indexer import Indexer
 
@@ -148,9 +149,26 @@ def _kill_owner(proc: subprocess.Popen) -> None:
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.xfail(
+    reason=(
+        "DuckDB does not support mixed RW + RO connections across processes. "
+        "A read_only=True connect() raises IOException when another process "
+        "holds a read-write lock. See FINDINGS.md for details."
+    ),
+    raises=duckdb.IOException,
+    strict=True,
+)
 def test_reader_can_search_while_owner_holds_connection(indexed_db: Path) -> None:
     """A read-only Database can execute searches while another process holds
-    the read-write connection on the same DuckDB file."""
+    the read-write connection on the same DuckDB file.
+
+    .. note::
+        This test documents a known DuckDB limitation: cross-process mixed
+        RW + RO access is **not supported**. The test is expected to fail
+        with ``duckdb.IOException``. If a future DuckDB release lifts this
+        restriction, this xfail will break (``strict=True``), alerting us
+        that the limitation has been resolved.
+    """
     owner = _spawn_owner(indexed_db)
     try:
         # -- open reader (read-only) in *this* process ----------------------
@@ -171,3 +189,108 @@ def test_reader_can_search_while_owner_holds_connection(indexed_db: Path) -> Non
             reader.close()
     finally:
         _kill_owner(owner)
+
+
+_INDEXER_PROCESS_MODULE = "tests.helpers.indexer_process"
+_INDEXER_TIMEOUT = 60  # seconds
+
+
+def _run_indexer(db_path: Path, project_dir: Path) -> None:
+    """Run the indexer subprocess and wait for it to finish.
+
+    Raises ``RuntimeError`` if the subprocess exits with a non-zero code.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-m", _INDEXER_PROCESS_MODULE, str(db_path), str(project_dir)],
+        capture_output=True,
+        text=True,
+        timeout=_INDEXER_TIMEOUT,
+        cwd=str(Path(__file__).resolve().parent.parent),
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src")},
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"Indexer process failed (rc={proc.returncode}).\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+    assert "done" in proc.stdout, f"Indexer did not print 'done'. stdout: {proc.stdout!r}"
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_reader_sees_owner_written_data(tmp_path: Path) -> None:
+    """After the owner process indexes a file and exits, a read-only reader
+    can search and find the content that was written.
+
+    This validates the viable multi-reader model: the owner indexes (RW),
+    closes its connection, and then readers can open the same database in
+    read-only mode and see all committed data.
+    """
+    # -- create a project with a distinctive source file --------------------
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    src_file = project_dir / "unique_module.py"
+    src_file.write_text(
+        textwrap.dedent("""\
+            def fibonacci_sequence(n: int) -> list[int]:
+                \"\"\"Generate the first n numbers in the Fibonacci sequence.\"\"\"
+                if n <= 0:
+                    return []
+                if n == 1:
+                    return [0]
+                seq = [0, 1]
+                for _ in range(2, n):
+                    seq.append(seq[-1] + seq[-2])
+                return seq
+
+            class QuantumCalculator:
+                \"\"\"A calculator that performs quantum-inspired computations.\"\"\"
+
+                def superposition(self, a: float, b: float) -> float:
+                    return (a + b) / 2.0
+        """),
+    )
+
+    db_path = tmp_path / "index.db"
+
+    # -- Phase 1: owner subprocess indexes the project ----------------------
+    _run_indexer(db_path, project_dir)
+
+    # Verify the DB file was created
+    assert db_path.exists(), "index.db was not created by the indexer subprocess"
+
+    # -- Phase 2: reader opens read-only and searches -----------------------
+    reader = Database(db_path)
+    reader.connect(read_only=True)
+    try:
+        # Verify data was indexed
+        stats = reader.get_index_stats()
+        assert stats["total_chunks"] > 0, "No chunks found — indexer wrote nothing"
+        assert stats["files_indexed"] > 0, "No files found — indexer wrote nothing"
+
+        # Vector search — may return [] if the VSS extension cannot resolve
+        # array_cosine_similarity(FLOAT[], FLOAT[]) due to a known DuckDB
+        # type-cast limitation with dynamic-size arrays.  We still call it
+        # to verify it does not raise an unhandled exception.
+        results = reader.vector_search(_FIXED_UNIT_VECTOR, top_k=10)
+        assert isinstance(results, list)
+        if results:
+            # If VSS works, verify content comes from our indexed file
+            all_content = " ".join(r["content"] for r in results)
+            assert "fibonacci_sequence" in all_content or "QuantumCalculator" in all_content, (
+                f"Expected indexed content from unique_module.py, got: {all_content[:200]}"
+            )
+
+        # BM25 / keyword search for a distinctive term — the primary
+        # assertion for cross-process data visibility
+        results_bm25 = reader.bm25_search("fibonacci", top_k=5)
+        assert isinstance(results_bm25, list)
+        assert len(results_bm25) > 0, "bm25_search returned no results for 'fibonacci'"
+
+        # Verify the BM25 results reference the correct file
+        bm25_paths = [r["file_path"] for r in results_bm25]
+        assert any("unique_module" in p for p in bm25_paths), (
+            f"Expected unique_module.py in BM25 results, got paths: {bm25_paths}"
+        )
+    finally:
+        reader.close()
