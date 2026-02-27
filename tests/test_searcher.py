@@ -13,6 +13,9 @@ from embecode.searcher import (
     SearchError,
     SearchResponse,
     SearchTimings,
+    _find_match_lines,
+    _pick_preview_lines,
+    _tokenize_query,
 )
 
 
@@ -726,3 +729,179 @@ class TestSearcher:
         assert "keyword" in record.getMessage()
         # Timing dict keys should appear in the message
         assert "bm25_search_ms" in record.getMessage()
+
+
+class TestTokenizeQuery:
+    """Tests for _tokenize_query()."""
+
+    def test_tokenize_query_basic(self) -> None:
+        """Standard multi-word query produces lowercase tokens."""
+        assert _tokenize_query("UserAvatar component") == ["useravatar", "component"]
+
+    def test_tokenize_query_drops_single_chars(self) -> None:
+        """Single-character tokens are dropped as too noisy."""
+        assert _tokenize_query("a b foo") == ["foo"]
+
+    def test_tokenize_query_deduplicates(self) -> None:
+        """Duplicate tokens keep only the first occurrence."""
+        assert _tokenize_query("foo bar foo") == ["foo", "bar"]
+
+    def test_tokenize_query_empty_string(self) -> None:
+        """Empty string produces empty list."""
+        assert _tokenize_query("") == []
+
+    def test_tokenize_query_special_characters(self) -> None:
+        """Non-word characters act as separators."""
+        assert _tokenize_query("user-avatar.tsx") == ["user", "avatar", "tsx"]
+
+
+class TestPickPreviewLines:
+    """Tests for _pick_preview_lines() — match-aware preview selection."""
+
+    def test_preview_shows_matching_lines_when_query_provided(self) -> None:
+        """Preview prefers lines containing query tokens over chunk-opening lines."""
+        content = (
+            "import React from 'react'\n"
+            "import { cn } from '@/lib/utils'\n"
+            "\n"
+            "// Component for user avatars\n"
+            "export function UserAvatar({\n"
+        )
+        preview = _pick_preview_lines(content, query="UserAvatar")
+        assert "UserAvatar" in preview
+        # Should NOT start with the import line
+        assert not preview.startswith("import React")
+
+    def test_preview_falls_back_when_no_lexical_match(self) -> None:
+        """Semantic-only query with no text overlap falls back to first 2 lines."""
+        content = 'def verify_credentials(user, password):\n    """Verify user credentials."""\n    return True\n'
+        preview = _pick_preview_lines(content, query="authentication logic")
+        assert (
+            preview == 'def verify_credentials(user, password):\n    """Verify user credentials."""'
+        )
+
+    def test_preview_falls_back_when_no_query(self) -> None:
+        """query=None uses first-2-lines fallback."""
+        content = "line one\nline two\nline three\n"
+        preview = _pick_preview_lines(content, query=None)
+        assert preview == "line one\nline two"
+
+    def test_preview_case_insensitive_match(self) -> None:
+        """Matching is case-insensitive."""
+        content = "import os\nexport function UserAvatar() {\n"
+        preview = _pick_preview_lines(content, query="useravatar")
+        assert "UserAvatar" in preview
+
+    def test_preview_picks_best_match_and_nearest(self) -> None:
+        """Best match (highest count) + nearest other match are selected."""
+        lines = [
+            "line 0",
+            "line 1",
+            "line 2 foo",
+            "line 3",
+            "line 4",
+            "line 5",
+            "line 6",
+            "line 7 foo",
+            "line 8",
+            "line 9",
+            "line 10",
+            "line 11",
+            "line 12",
+            "line 13",
+            "line 14 foo",
+        ]
+        content = "\n".join(lines)
+        preview = _pick_preview_lines(content, query="foo")
+        # Best match is line 2 (first, all have count 1), nearest other is line 7
+        assert "line 2 foo" in preview
+        assert "line 7 foo" in preview
+
+    def test_preview_single_match_with_context(self) -> None:
+        """Single matching line picks a non-empty neighbour as context."""
+        lines = [
+            "line 0",
+            "line 1",
+            "line 2",
+            "line 3",
+            "line 4 target",
+            "line 5",
+            "line 6",
+            "line 7",
+            "line 8",
+            "line 9",
+        ]
+        content = "\n".join(lines)
+        preview = _pick_preview_lines(content, query="target")
+        assert "line 4 target" in preview
+        # Should include a neighbor (line 3 or line 5)
+        lines_in_preview = preview.split("\n")
+        assert len(lines_in_preview) == 2
+
+    def test_preview_match_preserves_200_char_limit(self) -> None:
+        """Matching lines longer than 200 chars are truncated."""
+        long_line = "target " + "x" * 250
+        content = "short line\n" + long_line
+        preview = _pick_preview_lines(content, query="target")
+        assert len(preview) <= 200
+        assert preview.endswith("...")
+
+
+class TestFindMatchLines:
+    """Tests for _find_match_lines()."""
+
+    def test_match_lines_absolute_line_numbers(self) -> None:
+        """Lines are numbered from start_line, not zero."""
+        content = "alpha foo beta\ngamma\ndelta foo\n"
+        result = _find_match_lines(content, "foo", start_line=10)
+        assert result == [10, 12]
+
+    def test_match_lines_empty_when_no_match(self) -> None:
+        """Returns empty list when no tokens match."""
+        content = "def verify_credentials():\n    pass\n"
+        result = _find_match_lines(content, "authentication logic", start_line=1)
+        assert result == []
+
+    def test_match_lines_capped_at_8(self) -> None:
+        """At most 8 match lines are returned."""
+        # 20 lines all containing the token
+        content = "\n".join(f"line {i} foo" for i in range(20))
+        result = _find_match_lines(content, "foo", start_line=1)
+        assert len(result) == 8
+
+    def test_match_lines_empty_query_tokens(self) -> None:
+        """Query with only single-char tokens returns empty list."""
+        content = "a b c d e\n"
+        result = _find_match_lines(content, "a b c", start_line=1)
+        assert result == []
+
+
+class TestChunkResultPreviewWithQuery:
+    """Tests for ChunkResult.preview(query=...) integration."""
+
+    def test_preview_with_query_shows_matching_line(self) -> None:
+        """ChunkResult.preview(query=...) delegates to _pick_preview_lines."""
+        result = ChunkResult(
+            content="import os\nimport sys\ndef UserAvatar(): pass\n",
+            file_path="test.py",
+            language="python",
+            start_line=1,
+            end_line=3,
+            definitions="",
+            score=0.5,
+        )
+        preview = result.preview(query="UserAvatar")
+        assert "UserAvatar" in preview
+
+    def test_preview_without_query_uses_fallback(self) -> None:
+        """ChunkResult.preview() without query still uses first 2 non-empty lines."""
+        result = ChunkResult(
+            content="first line\nsecond line\nthird line\n",
+            file_path="test.py",
+            language="python",
+            start_line=1,
+            end_line=3,
+            definitions="",
+            score=0.5,
+        )
+        assert result.preview() == "first line\nsecond line"
