@@ -1,29 +1,43 @@
-"""Integration tests for concurrent DuckDB access (owner + reader).
+"""Integration tests for multi-process owner/reader IPC architecture.
 
-Verifies that two embecode processes pointed at the same DuckDB index can run
-simultaneously — one as OWNER (read-write) and one as READER (read-only) — and
-that the READER can serve search queries while the OWNER holds its connection.
+Verifies that the IPC layer correctly proxies search_code and index_status
+requests from reader processes to the owner process over a real Unix domain
+socket.  Also covers owner exit detection, concurrent reader load, and crash
+recovery (stale lock with dead PID).
+
+The first test group (``TestIPCOwnerReaderIntegration``) uses a **real**
+``IPCServer`` and ``IPCClient`` connected via a real AF_UNIX socket, backed
+by a lightweight mock server.  This exercises the full IPC transport path
+without the cost of real DuckDB indexing.
+
+The second test (``test_reader_sees_owner_written_data``) validates sequential
+cross-process data visibility: the owner indexes, closes the DB, and a reader
+process opens it and searches.
 
 Run with:
-    pytest tests/test_concurrent.py -v --no-cov
+    pytest tests/test_concurrent.py -v
 """
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import random
+import shutil
 import subprocess
 import sys
+import tempfile
 import textwrap
+import threading
 from pathlib import Path
+from typing import Any
+from unittest.mock import Mock
 
-import duckdb
 import pytest
 
-from embecode.config import load_config
 from embecode.db import Database
-from embecode.indexer import Indexer
+from embecode.ipc import IPCClient, IPCServer
 
 # ---------------------------------------------------------------------------
 # FixedVectorEmbedder — deterministic embedder for testing
@@ -52,144 +66,402 @@ class FixedVectorEmbedder:
 # Fixtures
 # ---------------------------------------------------------------------------
 
-_OWNER_PROCESS_MODULE = "tests.helpers.owner_process"
-_OWNER_READY_TIMEOUT = 30  # seconds
-
 
 @pytest.fixture()
-def indexed_db(tmp_path: Path) -> Path:
-    """Build a real DuckDB index in *tmp_path* and return the DB file path.
+def short_tmp():
+    """Create a short temporary directory under /tmp for Unix socket tests.
 
-    Creates a small project with a Python source file, indexes it using a
-    ``FixedVectorEmbedder``, then closes the database so the owner subprocess
-    can open it cleanly.
+    macOS limits AF_UNIX paths to 104 bytes; pytest's ``tmp_path`` is often
+    too long.  This fixture yields a short ``/tmp/ipc_XXXX`` path and cleans
+    up after the test.
     """
-    # -- tiny project -------------------------------------------------------
-    project_dir = tmp_path / "project"
-    project_dir.mkdir()
-    src_file = project_dir / "example.py"
-    src_file.write_text(
-        textwrap.dedent("""\
-            def greet(name: str) -> str:
-                \"\"\"Return a friendly greeting.\"\"\"
-                return f"Hello, {name}!"
-
-            def add(a: int, b: int) -> int:
-                \"\"\"Add two numbers and return the sum.\"\"\"
-                return a + b
-
-            class Calculator:
-                \"\"\"A simple calculator class.\"\"\"
-
-                def multiply(self, x: int, y: int) -> int:
-                    return x * y
-        """),
-    )
-
-    # -- index --------------------------------------------------------------
-    db_path = tmp_path / "index.db"
-    db = Database(db_path)
-    db.connect()
-    try:
-        config = load_config(project_dir)
-        embedder = FixedVectorEmbedder()
-        indexer = Indexer(project_dir, config, db, embedder)  # type: ignore[arg-type]
-        indexer.start_full_index(background=False)
-
-        # Verify something was actually indexed
-        stats = db.get_index_stats()
-        assert stats["total_chunks"] > 0, "Indexer produced no chunks"
-    finally:
-        db.close()
-
-    return db_path
+    d = tempfile.mkdtemp(prefix="ipc_")
+    yield Path(d)
+    shutil.rmtree(d, ignore_errors=True)
 
 
-def _spawn_owner(db_path: Path) -> subprocess.Popen:
-    """Launch the owner helper process and wait for its "ready" signal."""
-    proc = subprocess.Popen(
-        [sys.executable, "-m", _OWNER_PROCESS_MODULE, str(db_path)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        # Run from repo root so ``-m tests.helpers.owner_process`` resolves
-        cwd=str(Path(__file__).resolve().parent.parent),
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parent.parent / "src")},
-    )
-    try:
-        assert proc.stdout is not None
-        # Read the first line — must be "ready"
-        line = proc.stdout.readline()
-        if not line.strip():
-            # Process may have crashed — capture stderr for diagnostics
-            stderr = proc.stderr.read() if proc.stderr else ""
-            raise RuntimeError(
-                f"Owner process exited prematurely (rc={proc.poll()}). stderr:\n{stderr}"
-            )
-        assert line.strip() == "ready", f"Expected 'ready', got: {line!r}"
-    except Exception:
-        proc.kill()
-        proc.wait()
-        raise
-    return proc
+def _make_fake_server(
+    search_results: list[dict[str, Any]] | None = None,
+    index_status: dict[str, Any] | None = None,
+) -> Mock:
+    """Return a mock EmbeCodeServer with predictable search and status responses.
 
-
-def _kill_owner(proc: subprocess.Popen) -> None:
-    """Terminate the owner process cleanly."""
-    if proc.stdin:
-        proc.stdin.close()
-    proc.wait(timeout=10)
+    The mock has ``search_code`` and ``get_index_status`` methods that the
+    ``IPCServer._dispatch`` machinery calls.
+    """
+    server = Mock()
+    server.search_code.return_value = search_results or [
+        {
+            "file_path": "hello.py",
+            "language": "python",
+            "start_line": 1,
+            "end_line": 3,
+            "definitions": "function greet",
+            "preview": "def greet():\n    print('hello')",
+            "score": 0.95,
+        }
+    ]
+    server.get_index_status.return_value = index_status or {
+        "files_indexed": 10,
+        "total_chunks": 50,
+        "embedding_model": "test-model",
+        "is_indexing": False,
+        "last_updated": "2025-01-01T00:00:00",
+        "current_file": None,
+        "progress": None,
+        "role": "owner",
+    }
+    return server
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# IPC owner/reader integration tests (real sockets, mock server backend)
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.integration
-@pytest.mark.slow
-@pytest.mark.xfail(
-    reason=(
-        "DuckDB does not support mixed RW + RO connections across processes. "
-        "A read_only=True connect() raises IOException when another process "
-        "holds a read-write lock. See FINDINGS.md for details."
-    ),
-    raises=duckdb.IOException,
-    strict=True,
-)
-def test_reader_can_search_while_owner_holds_connection(indexed_db: Path) -> None:
-    """A read-only Database can execute searches while another process holds
-    the read-write connection on the same DuckDB file.
+class TestIPCOwnerReaderIntegration:
+    """Real IPC server ↔ client over Unix domain socket with mock backend.
 
-    .. note::
-        This test documents a known DuckDB limitation: cross-process mixed
-        RW + RO access is **not supported**. The test is expected to fail
-        with ``duckdb.IOException``. If a future DuckDB release lifts this
-        restriction, this xfail will break (``strict=True``), alerting us
-        that the limitation has been resolved.
+    These tests verify the full message-framing + dispatch round-trip without
+    requiring a real DuckDB database.
     """
-    owner = _spawn_owner(indexed_db)
-    try:
-        # -- open reader (read-only) in *this* process ----------------------
-        reader = Database(indexed_db)
-        reader.connect()
+
+    def test_reader_search_via_ipc(self, short_tmp: Path) -> None:
+        """Reader sends search_code request to owner via IPC and gets results."""
+        socket_path = short_tmp / "daemon.sock"
+        fake_server = _make_fake_server()
+
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
         try:
-            # Vector search
-            results = reader.vector_search(_FIXED_UNIT_VECTOR, top_k=5)
-            assert isinstance(results, list)
-            assert len(results) > 0, "vector_search returned no results"
+            client = IPCClient(socket_path)
+            client.connect()
+            try:
+                results = client.search_code(
+                    query="greet function", mode="semantic", top_k=5, path="src/"
+                )
+                assert isinstance(results, list)
+                assert len(results) == 1
+                assert results[0]["file_path"] == "hello.py"
+                assert results[0]["score"] == 0.95
 
-            # BM25 / keyword search
-            results_bm25 = reader.bm25_search("greet", top_k=5)
-            assert isinstance(results_bm25, list)
-            # bm25 may use fallback substring search — either way, should succeed
-            assert len(results_bm25) > 0, "bm25_search returned no results"
+                # Verify the server was called with the correct parameters
+                fake_server.search_code.assert_called_once_with(
+                    query="greet function", mode="semantic", top_k=5, path="src/"
+                )
+            finally:
+                client.close()
         finally:
-            reader.close()
-    finally:
-        _kill_owner(owner)
+            ipc_server.stop()
 
+    def test_reader_index_status_via_ipc(self, short_tmp: Path) -> None:
+        """Reader sends index_status request to owner via IPC and gets status."""
+        socket_path = short_tmp / "daemon.sock"
+        fake_server = _make_fake_server()
+
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
+        try:
+            client = IPCClient(socket_path)
+            client.connect()
+            try:
+                status = client.index_status()
+                assert status["files_indexed"] == 10
+                assert status["total_chunks"] == 50
+                assert status["embedding_model"] == "test-model"
+                assert status["is_indexing"] is False
+                fake_server.get_index_status.assert_called_once()
+            finally:
+                client.close()
+        finally:
+            ipc_server.stop()
+
+    def test_reader_detects_owner_exit(self, short_tmp: Path) -> None:
+        """When the owner process exits, the reader gets ConnectionError.
+
+        In production, the OS closes all file descriptors when the owner
+        process exits.  Here we simulate this by explicitly shutting down
+        the client-side socket from the server's handler threads, then
+        stopping the server.
+        """
+        import socket as socket_mod
+
+        socket_path = short_tmp / "daemon.sock"
+
+        # Track handler connections so we can forcibly close them
+        handler_connections: list[socket_mod.socket] = []
+        orig_handle = IPCServer._handle_connection
+
+        def tracking_handle(self_ipc: IPCServer, conn: socket_mod.socket) -> None:
+            handler_connections.append(conn)
+            return orig_handle(self_ipc, conn)
+
+        fake_server = _make_fake_server()
+        ipc_server = IPCServer(socket_path, fake_server)
+
+        # Monkey-patch to capture handler connections
+        ipc_server._handle_connection = lambda conn: tracking_handle(ipc_server, conn)  # type: ignore[assignment]
+
+        ipc_server.start()
+
+        client = IPCClient(socket_path)
+        client.connect()
+
+        # Verify connection works first
+        results = client.search_code(query="test")
+        assert len(results) == 1
+
+        # Simulate owner process exit: forcibly close all handler connections
+        # (this is what the OS does when the process terminates)
+        for conn in handler_connections:
+            try:
+                conn.shutdown(socket_mod.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+        ipc_server.stop()
+
+        # Reader's next request should raise ConnectionError
+        with pytest.raises(ConnectionError):
+            client.search_code(query="test after owner exit")
+
+        client.close()
+
+    def test_multiple_sequential_requests(self, short_tmp: Path) -> None:
+        """A single reader connection can send many requests in sequence."""
+        socket_path = short_tmp / "daemon.sock"
+        fake_server = _make_fake_server()
+
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
+        try:
+            client = IPCClient(socket_path)
+            client.connect()
+            try:
+                for i in range(20):
+                    results = client.search_code(query=f"query_{i}")
+                    assert len(results) == 1
+                    assert results[0]["file_path"] == "hello.py"
+                assert fake_server.search_code.call_count == 20
+            finally:
+                client.close()
+        finally:
+            ipc_server.stop()
+
+    def test_concurrent_reader_clients(self, short_tmp: Path) -> None:
+        """Multiple readers connect simultaneously and all get correct results."""
+        socket_path = short_tmp / "daemon.sock"
+        fake_server = _make_fake_server()
+
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
+        try:
+            num_clients = 5
+            errors: list[Exception] = []
+            results_per_client: list[list[dict[str, Any]]] = [[] for _ in range(num_clients)]
+
+            def reader_worker(idx: int) -> None:
+                try:
+                    client = IPCClient(socket_path)
+                    client.connect()
+                    try:
+                        for _ in range(10):
+                            results = client.search_code(query=f"client_{idx}")
+                            results_per_client[idx].extend(results)
+                    finally:
+                        client.close()
+                except Exception as exc:
+                    errors.append(exc)
+
+            threads = [
+                threading.Thread(target=reader_worker, args=(i,)) for i in range(num_clients)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=15)
+
+            assert not errors, f"Reader threads raised errors: {errors}"
+            for idx in range(num_clients):
+                assert len(results_per_client[idx]) == 10, (
+                    f"Client {idx} got {len(results_per_client[idx])} results, expected 10"
+                )
+            assert fake_server.search_code.call_count == num_clients * 10
+        finally:
+            ipc_server.stop()
+
+    def test_reader_search_with_owner_error(self, short_tmp: Path) -> None:
+        """When the owner's search_code raises, the IPC layer returns an error."""
+        socket_path = short_tmp / "daemon.sock"
+        fake_server = _make_fake_server()
+        fake_server.search_code.side_effect = RuntimeError("Index corrupt")
+
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
+        try:
+            client = IPCClient(socket_path)
+            client.connect()
+            try:
+                with pytest.raises(RuntimeError, match="Index corrupt"):
+                    client.search_code(query="broken query")
+            finally:
+                client.close()
+        finally:
+            ipc_server.stop()
+
+    def test_reader_index_status_with_owner_error(self, short_tmp: Path) -> None:
+        """When the owner's get_index_status raises, the IPC layer returns an error."""
+        socket_path = short_tmp / "daemon.sock"
+        fake_server = _make_fake_server()
+        fake_server.get_index_status.side_effect = RuntimeError("DB closed")
+
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
+        try:
+            client = IPCClient(socket_path)
+            client.connect()
+            try:
+                with pytest.raises(RuntimeError, match="DB closed"):
+                    client.index_status()
+            finally:
+                client.close()
+        finally:
+            ipc_server.stop()
+
+    def test_reader_mixed_search_and_status_requests(self, short_tmp: Path) -> None:
+        """Reader interleaves search_code and index_status on one connection."""
+        socket_path = short_tmp / "daemon.sock"
+        fake_server = _make_fake_server()
+
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
+        try:
+            client = IPCClient(socket_path)
+            client.connect()
+            try:
+                # search → status → search → status
+                r1 = client.search_code(query="first")
+                assert r1[0]["file_path"] == "hello.py"
+
+                s1 = client.index_status()
+                assert s1["files_indexed"] == 10
+
+                r2 = client.search_code(query="second", mode="keyword", top_k=3)
+                assert len(r2) == 1
+
+                s2 = client.index_status()
+                assert s2["is_indexing"] is False
+            finally:
+                client.close()
+        finally:
+            ipc_server.stop()
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestCrashRecovery:
+    """Integration tests for stale lock file detection and recovery."""
+
+    def test_stale_lock_with_dead_pid_allows_new_owner(self, short_tmp: Path) -> None:
+        """A lock file referencing a dead PID is cleaned up by _acquire_lock.
+
+        This test creates a lock file with a non-existent PID, then
+        instantiates an EmbeCodeServer that should detect the stale lock,
+        remove it, and become the owner.
+        """
+        from unittest.mock import patch
+
+        from embecode.server import EmbeCodeServer
+
+        cache_dir = short_tmp / "cache"
+        cache_dir.mkdir()
+
+        # Create a project directory
+        project_dir = short_tmp / "project"
+        project_dir.mkdir()
+        (project_dir / "main.py").write_text("x = 1\n")
+
+        lock_path = cache_dir / "daemon.lock"
+        socket_path = cache_dir / "daemon.sock"
+
+        # Write a stale lock with a definitely-dead PID
+        dead_pid = 999_999_999
+        lock_path.write_text(json.dumps({"pid": dead_pid}))
+        assert lock_path.exists()
+
+        # Also leave a stale socket file (simulating unclean shutdown)
+        socket_path.touch()
+
+        # Mock CacheManager to point at our cache dir
+        mock_cm = Mock()
+        mock_cm.get_cache_dir.return_value = cache_dir
+        mock_cm.get_lock_path.return_value = lock_path
+        mock_cm.get_socket_path.return_value = socket_path
+        mock_cm.update_access_time.return_value = None
+
+        mock_config = Mock()
+        mock_config.embeddings.model = "test-model"
+        mock_config.daemon.auto_watch = False
+        mock_config.daemon.debounce_ms = 500
+
+        mock_db = Mock()
+        mock_db.get_metadata.return_value = None
+        mock_db.set_metadata.return_value = None
+        mock_db.connect.return_value = None
+        mock_db.close.return_value = None
+        mock_db._conn = object()
+
+        with (
+            patch("embecode.server.CacheManager", return_value=mock_cm),
+            patch("embecode.server.load_config", return_value=mock_config),
+            patch("embecode.server.Database", return_value=mock_db),
+            patch("embecode.server.Embedder"),
+            patch("embecode.server.Searcher"),
+            patch("embecode.server.Indexer"),
+            patch("embecode.server.IPCServer"),
+            patch("embecode.server.threading.Thread"),
+        ):
+            server = EmbeCodeServer(project_dir)
+
+            # The stale lock should have been removed and re-created
+            assert server._role == "owner"
+
+            # The lock file should now contain our PID
+            with open(lock_path) as f:
+                data = json.load(f)
+            assert data["pid"] == os.getpid()
+
+    def test_stale_socket_file_cleaned_on_ipc_server_start(self, short_tmp: Path) -> None:
+        """IPCServer.start() removes a stale socket file before binding."""
+        socket_path = short_tmp / "daemon.sock"
+        # Create a stale socket file (just a regular file — bind would fail)
+        socket_path.touch()
+        assert socket_path.exists()
+
+        fake_server = _make_fake_server()
+        ipc_server = IPCServer(socket_path, fake_server)
+        ipc_server.start()
+        try:
+            # Verify we can connect — the stale file was removed
+            client = IPCClient(socket_path)
+            client.connect()
+            results = client.search_code(query="test")
+            assert len(results) == 1
+            client.close()
+        finally:
+            ipc_server.stop()
+
+
+# ---------------------------------------------------------------------------
+# Sequential cross-process data visibility (retained from v1)
+# ---------------------------------------------------------------------------
 
 _INDEXER_PROCESS_MODULE = "tests.helpers.indexer_process"
 _INDEXER_TIMEOUT = 60  # seconds
@@ -219,12 +491,12 @@ def _run_indexer(db_path: Path, project_dir: Path) -> None:
 @pytest.mark.integration
 @pytest.mark.slow
 def test_reader_sees_owner_written_data(tmp_path: Path) -> None:
-    """After the owner process indexes a file and exits, a read-only reader
-    can search and find the content that was written.
+    """After the owner process indexes a file and exits, a reader
+    can open the same database and search for the indexed content.
 
-    This validates the viable multi-reader model: the owner indexes (RW),
-    closes its connection, and then readers can open the same database in
-    read-only mode and see all committed data.
+    This validates sequential cross-process data visibility: the owner
+    indexes (RW), closes its connection, and then a reader opens the DB
+    and finds all committed data.
     """
     # -- create a project with a distinctive source file --------------------
     project_dir = tmp_path / "project"
