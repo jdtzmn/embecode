@@ -282,6 +282,21 @@ class CacheManager:
             # Fail silently - registry is not critical
             pass
 
+    def get_lock_path(self, project_path: str | Path) -> Path:
+        """Get the daemon lock file path for a project.
+
+        Args:
+            project_path: Absolute path to the project
+
+        Returns:
+            Path to the daemon.lock file for this project's cache directory.
+            The lock file lives at ~/.cache/embecode/<hash>/daemon.lock.
+            Note: This assumes the cache directory is on local disk.
+            O_EXCL is not atomic on NFSv2, so NFS cache directories are not supported.
+        """
+        cache_dir = self.get_cache_dir(project_path)
+        return cache_dir / "daemon.lock"
+
     @staticmethod
     def _hash_path(path: str) -> str:
         """Generate 8-character hash of a path.
