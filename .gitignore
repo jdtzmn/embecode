@@ -35,3 +35,6 @@ htmlcov/
 
 # embecode cache (never commit index data)
 .embecode.toml.local
+
+# Persistent benchmark database (rebuilt automatically if missing)
+.bench_db/

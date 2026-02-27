@@ -9,6 +9,8 @@ Skip with: pytest -m "not slow"
 
 from __future__ import annotations
 
+import math
+import random
 import tempfile
 import time
 from pathlib import Path
@@ -18,6 +20,7 @@ import pytest
 
 from embecode import chunker
 from embecode.config import LanguageConfig, load_config
+from embecode.db import Database
 from embecode.indexer import Indexer
 from embecode.searcher import Searcher
 
@@ -182,6 +185,9 @@ class MockDatabase:
         """Simulate BM25/keyword search."""
         return self.vector_search([], top_k, path_prefix)
 
+    def shrink_memory(self) -> None:
+        """No-op: mock database has nothing to shrink."""
+
 
 class MockEmbedder:
     """Fast mock embedder for performance testing."""
@@ -194,6 +200,9 @@ class MockEmbedder:
         """Generate fake embeddings (fast)."""
         # Return zero vectors for speed
         return [[0.0] * self.dimension for _ in texts]
+
+    def unload(self) -> None:
+        """No-op: mock embedder has nothing to unload."""
 
 
 # ============================================================================
@@ -616,3 +625,156 @@ class TestEndToEndPerformance:
         # Overall performance requirements
         total_time = index_metrics.duration + search_metrics.duration + update_metrics.duration
         assert total_time < 120.0, f"Complete workflow too slow: {total_time:.2f}s"
+
+
+# ============================================================================
+# Search Benchmarks (pytest-benchmark)
+# ============================================================================
+
+
+@pytest.fixture(scope="class")
+def search_fixture(tmp_path_factory: pytest.TempPathFactory) -> Searcher:
+    """Build a 100-file mock index once, shared across all benchmark tests."""
+    tmp_path = tmp_path_factory.mktemp("bench")
+    repo = generate_large_codebase(tmp_path, num_files=100)
+    config = load_config(repo)
+    db = MockDatabase()
+    embedder = MockEmbedder()
+    indexer = Indexer(repo, config, db, embedder)
+    indexer.start_full_index(background=False)
+    return Searcher(db, embedder)
+
+
+class TestSearchBenchmark:
+    """Benchmark search query speed using pytest-benchmark.
+
+    Run with:
+        pytest tests/test_performance.py::TestSearchBenchmark -v --benchmark-only
+    """
+
+    _QUERY = "authentication function"
+
+    def test_benchmark_hybrid(self, benchmark: Any, search_fixture: Searcher) -> None:
+        """Benchmark hybrid (BM25 + vector + RRF) search."""
+        response = benchmark(search_fixture.search, self._QUERY, mode="hybrid")
+        timings = response.timings.to_dict()
+        print(f"\nphase breakdown (last run): {timings}")
+
+    def test_benchmark_semantic(self, benchmark: Any, search_fixture: Searcher) -> None:
+        """Benchmark semantic (vector) search."""
+        response = benchmark(search_fixture.search, self._QUERY, mode="semantic")
+        timings = response.timings.to_dict()
+        print(f"\nphase breakdown (last run): {timings}")
+
+    def test_benchmark_keyword(self, benchmark: Any, search_fixture: Searcher) -> None:
+        """Benchmark keyword (BM25) search."""
+        response = benchmark(search_fixture.search, self._QUERY, mode="keyword")
+        timings = response.timings.to_dict()
+        print(f"\nphase breakdown (last run): {timings}")
+
+
+# ============================================================================
+# Real DuckDB Search Benchmarks (pytest-benchmark)
+# ============================================================================
+
+# Embedding dimension for nomic-ai/nomic-embed-text-v1.5 (default model)
+_BENCH_DIM = 768
+
+# Fixed random unit vector used for all vector search calls — avoids model
+# inference while still exercising the real DuckDB VSS cosine-similarity scan.
+random.seed(42)
+_raw = [random.gauss(0, 1) for _ in range(_BENCH_DIM)]
+_norm = math.sqrt(sum(x * x for x in _raw))
+_FIXED_UNIT_VECTOR: list[float] = [x / _norm for x in _raw]
+
+# Persistent DB location — survives between pytest runs so setup only pays
+# the indexing cost once.
+_BENCH_DB_DIR = Path(__file__).parent.parent / ".bench_db"
+_BENCH_DB_PATH = _BENCH_DB_DIR / "search_bench.duckdb"
+# generate_large_codebase(parent) creates parent/"large_repo", so point at
+# _BENCH_DB_DIR and the repo ends up at .bench_db/large_repo.
+_BENCH_REPO_PATH = _BENCH_DB_DIR / "large_repo"
+
+
+class FixedVectorEmbedder:
+    """Embedder that always returns the same pre-computed unit vector.
+
+    This lets us exercise the real DuckDB VSS/FTS query path without loading
+    a sentence-transformers model.  The fixed vector means cosine scores are
+    uniform across all chunks, but the index scan, sorting, and result
+    materialisation are all real.
+    """
+
+    dimension = _BENCH_DIM
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [_FIXED_UNIT_VECTOR for _ in texts]
+
+    def unload(self) -> None:
+        pass
+
+
+def _build_bench_db() -> tuple[Database, FixedVectorEmbedder]:
+    """Build (or reuse) the persistent benchmark DuckDB and return an open connection."""
+    embedder = FixedVectorEmbedder()
+
+    _BENCH_DB_DIR.mkdir(exist_ok=True)
+
+    db = Database(_BENCH_DB_PATH)
+    db.connect()
+
+    # If the DB already has chunks, reuse it.
+    try:
+        stats = db.get_index_stats()
+        if stats["total_chunks"] > 0:
+            return db, embedder
+    except Exception:
+        pass
+
+    # First run: generate a synthetic repo and index it into the real DB.
+    if not _BENCH_REPO_PATH.exists():
+        generate_large_codebase(_BENCH_DB_DIR, num_files=200)
+
+    config = load_config(_BENCH_REPO_PATH)
+    indexer = Indexer(_BENCH_REPO_PATH, config, db, embedder)  # type: ignore[arg-type]
+    indexer.start_full_index(background=False)
+
+    return db, embedder
+
+
+@pytest.fixture(scope="session")
+def real_search_fixture() -> Searcher:
+    """Return a Searcher backed by a real DuckDB (built once per session)."""
+    db, embedder = _build_bench_db()
+    return Searcher(db, embedder)  # type: ignore[arg-type]
+
+
+class TestSearchBenchmarkReal:
+    """Benchmark search query speed against a real DuckDB index.
+
+    Uses a persistent DB at .bench_db/ so the indexing cost is only paid on
+    the first run.  Delete .bench_db/ to force a rebuild.
+
+    Run with:
+        pytest tests/test_performance.py::TestSearchBenchmarkReal -v --benchmark-only --no-cov -s
+    """
+
+    _QUERY = "authentication function"
+
+    def test_benchmark_real_hybrid(self, benchmark: Any, real_search_fixture: Searcher) -> None:
+        """Benchmark hybrid (BM25 + vector + RRF) search against real DuckDB."""
+        response = benchmark(real_search_fixture.search, self._QUERY, mode="hybrid")
+        timings = response.timings.to_dict()
+        print(f"\nphase breakdown (last run): {timings}")
+
+    def test_benchmark_real_semantic(self, benchmark: Any, real_search_fixture: Searcher) -> None:
+        """Benchmark semantic (vector) search against real DuckDB."""
+        response = benchmark(real_search_fixture.search, self._QUERY, mode="semantic")
+        timings = response.timings.to_dict()
+        print(f"\nphase breakdown (last run): {timings}")
+
+    def test_benchmark_real_keyword(self, benchmark: Any, real_search_fixture: Searcher) -> None:
+        """Benchmark keyword (BM25) search against real DuckDB."""
+        response = benchmark(real_search_fixture.search, self._QUERY, mode="keyword")
+        timings = response.timings.to_dict()
+        print(f"\nphase breakdown (last run): {timings}")
