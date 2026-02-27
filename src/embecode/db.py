@@ -66,6 +66,14 @@ class Database:
             self._read_only = read_only
 
             if not read_only:
+                # Cap DuckDB's buffer pool so it doesn't consume all available RAM.
+                # Without this, DuckDB defaults to ~80% of system RAM and never shrinks
+                # its buffer pool voluntarily, causing the post-indexing memory floor.
+                try:
+                    self._conn.execute("SET memory_limit='2GB'")
+                except Exception as e:
+                    logger.warning(f"Failed to set DuckDB memory limit: {e}")
+
                 # Install and load VSS extension for vector similarity search
                 try:
                     self._conn.execute("INSTALL vss")
@@ -123,6 +131,23 @@ class Database:
                 self._conn = None
                 self._is_initialized = False
                 self._read_only = False
+
+    def shrink_memory(self) -> None:
+        """Release DuckDB's buffer pool pages back to the OS after a bulk write.
+
+        DuckDB retains its buffer pool indefinitely by default, which causes a
+        large memory footprint to persist after indexing completes. Calling
+        ``checkpoint()`` flushes all dirty buffer-pool pages to the ``.db``
+        file so the OS can reclaim the backing physical RAM.  The
+        ``memory_limit`` set in :meth:`connect` then prevents the pool from
+        refilling beyond 2 GB on subsequent reads.
+        """
+        if self._conn is None:
+            return
+        try:
+            self._conn.checkpoint()
+        except Exception as e:
+            logger.warning(f"Failed to checkpoint DuckDB: {e}")
 
     def _initialize_schema(self) -> None:
         """Create tables and indexes if they don't exist.

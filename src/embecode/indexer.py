@@ -251,6 +251,16 @@ class Indexer:
                 self._progress = None
                 self._indexing_type = None
                 self._files_to_process = None
+                self._indexing_thread = None
+
+            # Release memory held by the embedding model weights and DuckDB's
+            # buffer pool now that bulk writes are done.  Both will reload/refill
+            # lazily on the next search request.
+            self.embedder.unload()
+            self.db.shrink_memory()
+
+            # Drop cached .gitignore PathSpec objects accumulated during the walk.
+            self._gitignore_cache.clear()
 
     def start_catchup_index(self, background: bool = True) -> None:
         """
@@ -370,6 +380,16 @@ class Indexer:
                 self._progress = None
                 self._indexing_type = None
                 self._files_to_process = None
+                self._indexing_thread = None
+
+            # Release memory held by the embedding model weights and DuckDB's
+            # buffer pool now that bulk writes are done.  Both will reload/refill
+            # lazily on the next search request.
+            self.embedder.unload()
+            self.db.shrink_memory()
+
+            # Drop cached .gitignore PathSpec objects accumulated during the walk.
+            self._gitignore_cache.clear()
 
     def update_file(self, file_path: Path) -> None:
         """

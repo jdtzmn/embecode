@@ -6,7 +6,14 @@ from unittest.mock import Mock
 
 import pytest
 
-from embecode.searcher import ChunkResult, IndexNotReadyError, Searcher, SearchError
+from embecode.searcher import (
+    ChunkResult,
+    IndexNotReadyError,
+    Searcher,
+    SearchError,
+    SearchResponse,
+    SearchTimings,
+)
 
 
 class TestChunkResult:
@@ -161,7 +168,7 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("authentication logic", mode="semantic", top_k=2)
+        response = searcher.search("authentication logic", mode="semantic", top_k=2)
 
         # Verify embedder was called
         mock_embedder.embed.assert_called_once_with(["authentication logic"])
@@ -174,11 +181,11 @@ class TestSearcher:
         )
 
         # Verify results
-        assert len(results) == 2
-        assert results[0].file_path == "src/auth.py"
-        assert results[0].score == 0.95
-        assert results[1].file_path == "src/user.py"
-        assert results[1].score == 0.85
+        assert len(response.results) == 2
+        assert response.results[0].file_path == "src/auth.py"
+        assert response.results[0].score == 0.95
+        assert response.results[1].file_path == "src/user.py"
+        assert response.results[1].score == 0.85
 
     def test_search_semantic_with_path_filter(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -218,7 +225,7 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("authenticate", mode="keyword", top_k=2)
+        response = searcher.search("authenticate", mode="keyword", top_k=2)
 
         # Verify database query
         mock_db.bm25_search.assert_called_once_with(
@@ -228,11 +235,11 @@ class TestSearcher:
         )
 
         # Verify results
-        assert len(results) == 2
-        assert results[0].file_path == "src/auth.py"
-        assert results[0].score == 10.5
-        assert results[1].file_path == "src/user.py"
-        assert results[1].score == 8.2
+        assert len(response.results) == 2
+        assert response.results[0].file_path == "src/auth.py"
+        assert response.results[0].score == 10.5
+        assert response.results[1].file_path == "src/user.py"
+        assert response.results[1].score == 8.2
 
     def test_search_keyword_with_path_filter(self, searcher: Searcher, mock_db: Mock) -> None:
         """Should apply path prefix filter for keyword search."""
@@ -312,7 +319,7 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("authentication", mode="hybrid", top_k=3)
+        response = searcher.search("authentication", mode="hybrid", top_k=3)
 
         # Verify both search methods were called (fetching 3x = 9 results each)
         mock_db.vector_search.assert_called_once()
@@ -331,15 +338,15 @@ class TestSearcher:
         #   RRF = 1/(60+2) = 0.0161
 
         # Expected order: login (0.0325), auth (0.0323), security (0.0161)
-        assert len(results) == 3
-        assert results[0].file_path == "src/login.py"
-        assert results[1].file_path == "src/auth.py"
-        assert results[2].file_path == "src/security.py"
+        assert len(response.results) == 3
+        assert response.results[0].file_path == "src/login.py"
+        assert response.results[1].file_path == "src/auth.py"
+        assert response.results[2].file_path == "src/security.py"
 
         # Verify scores are RRF scores (not original scores)
-        assert results[0].score == pytest.approx(1 / 62 + 1 / 61, abs=0.0001)
-        assert results[1].score == pytest.approx(1 / 61 + 1 / 63, abs=0.0001)
-        assert results[2].score == pytest.approx(1 / 62, abs=0.0001)
+        assert response.results[0].score == pytest.approx(1 / 62 + 1 / 61, abs=0.0001)
+        assert response.results[1].score == pytest.approx(1 / 61 + 1 / 63, abs=0.0001)
+        assert response.results[2].score == pytest.approx(1 / 62, abs=0.0001)
 
     def test_search_hybrid_with_path_filter(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -363,9 +370,9 @@ class TestSearcher:
         mock_db.vector_search.return_value = []
         mock_db.bm25_search.return_value = []
 
-        results = searcher.search("nonexistent query", mode="hybrid", top_k=5)
+        response = searcher.search("nonexistent query", mode="hybrid", top_k=5)
 
-        assert len(results) == 0
+        assert len(response.results) == 0
 
     def test_search_hybrid_one_empty_leg(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -385,12 +392,12 @@ class TestSearcher:
         ]
         mock_db.bm25_search.return_value = []
 
-        results = searcher.search("query", mode="hybrid", top_k=5)
+        response = searcher.search("query", mode="hybrid", top_k=5)
 
         # Should still return the semantic result
-        assert len(results) == 1
-        assert results[0].file_path == "src/main.py"
-        assert results[0].score == pytest.approx(1 / 61, abs=0.0001)
+        assert len(response.results) == 1
+        assert response.results[0].file_path == "src/main.py"
+        assert response.results[0].score == pytest.approx(1 / 61, abs=0.0001)
 
     def test_search_default_parameters(self, searcher: Searcher, mock_db: Mock) -> None:
         """Should use default parameters (mode=hybrid, top_k=10)."""
@@ -435,17 +442,17 @@ class TestSearcher:
         mock_db.vector_search.return_value = same_results
         mock_db.bm25_search.return_value = same_results
 
-        results = searcher.search("query", mode="hybrid", top_k=2)
+        response = searcher.search("query", mode="hybrid", top_k=2)
 
         # Should deduplicate and boost scores via RRF
         # Each result appears in both rank 1 and rank 2
         # foo: RRF = 1/(60+1) + 1/(60+1) = 2 * 1/61 = 0.0328
         # bar: RRF = 1/(60+2) + 1/(60+2) = 2 * 1/62 = 0.0323
-        assert len(results) == 2
-        assert results[0].file_path == "src/main.py"
-        assert results[1].file_path == "src/utils.py"
-        assert results[0].score == pytest.approx(2 / 61, abs=0.0001)
-        assert results[1].score == pytest.approx(2 / 62, abs=0.0001)
+        assert len(response.results) == 2
+        assert response.results[0].file_path == "src/main.py"
+        assert response.results[1].file_path == "src/utils.py"
+        assert response.results[0].score == pytest.approx(2 / 61, abs=0.0001)
+        assert response.results[1].score == pytest.approx(2 / 62, abs=0.0001)
 
     def test_search_hybrid_different_chunks_same_location(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -475,14 +482,14 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("query", mode="hybrid", top_k=1)
+        response = searcher.search("query", mode="hybrid", top_k=1)
 
         # Should treat as duplicate and use semantic version (added first)
-        assert len(results) == 1
-        assert results[0].content == "def foo(): pass"  # From semantic
-        assert results[0].definitions == "function foo"  # From semantic
+        assert len(response.results) == 1
+        assert response.results[0].content == "def foo(): pass"  # From semantic
+        assert response.results[0].definitions == "function foo"  # From semantic
         # RRF score combines both: 1/(60+1) + 1/(60+1) = 2/61
-        assert results[0].score == pytest.approx(2 / 61, abs=0.0001)
+        assert response.results[0].score == pytest.approx(2 / 61, abs=0.0001)
 
     def test_search_hybrid_top_k_smaller_than_results(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -514,12 +521,12 @@ class TestSearcher:
             for i in range(5)
         ]
 
-        results = searcher.search("query", mode="hybrid", top_k=3)
+        response = searcher.search("query", mode="hybrid", top_k=3)
 
         # Should return exactly 3 results
-        assert len(results) == 3
+        assert len(response.results) == 3
         # All results should have RRF scores
-        for result in results:
+        for result in response.results:
             assert result.score > 0
 
     def test_search_hybrid_rrf_k_constant(self, searcher: Searcher) -> None:
@@ -532,19 +539,19 @@ class TestSearcher:
         """Should return empty list when semantic search finds no results."""
         mock_db.vector_search.return_value = []
 
-        results = searcher.search("nonexistent", mode="semantic", top_k=5)
+        response = searcher.search("nonexistent", mode="semantic", top_k=5)
 
-        assert len(results) == 0
-        assert results == []
+        assert len(response.results) == 0
+        assert response.results == []
 
     def test_search_keyword_empty_results(self, searcher: Searcher, mock_db: Mock) -> None:
         """Should return empty list when keyword search finds no results."""
         mock_db.bm25_search.return_value = []
 
-        results = searcher.search("nonexistent", mode="keyword", top_k=5)
+        response = searcher.search("nonexistent", mode="keyword", top_k=5)
 
-        assert len(results) == 0
-        assert results == []
+        assert len(response.results) == 0
+        assert response.results == []
 
     def test_search_hybrid_large_top_k(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -585,3 +592,137 @@ class TestSearcher:
         """Should verify exception hierarchy."""
         assert issubclass(IndexNotReadyError, SearchError)
         assert issubclass(SearchError, Exception)
+
+    # --- New timing tests ---
+
+    def test_search_returns_search_response(self, searcher: Searcher, mock_db: Mock) -> None:
+        """Searcher.search() should return a SearchResponse with .results and .timings."""
+        mock_db.bm25_search.return_value = []
+        mock_db.vector_search.return_value = []
+
+        response = searcher.search("query", mode="keyword")
+
+        assert isinstance(response, SearchResponse)
+        assert hasattr(response, "results")
+        assert hasattr(response, "timings")
+        assert isinstance(response.results, list)
+        assert isinstance(response.timings, SearchTimings)
+
+    def test_timings_hybrid_has_all_phases(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """Hybrid search should populate all timing fields > 0."""
+        mock_db.vector_search.return_value = [
+            {
+                "content": "def foo(): pass",
+                "file_path": "src/a.py",
+                "language": "python",
+                "start_line": 1,
+                "end_line": 5,
+                "definitions": "",
+                "score": 0.9,
+            }
+        ]
+        mock_db.bm25_search.return_value = [
+            {
+                "content": "def bar(): pass",
+                "file_path": "src/b.py",
+                "language": "python",
+                "start_line": 1,
+                "end_line": 5,
+                "definitions": "",
+                "score": 5.0,
+            }
+        ]
+
+        response = searcher.search("query", mode="hybrid", top_k=2)
+
+        t = response.timings
+        assert t.embedding_ms > 0
+        assert t.vector_search_ms > 0
+        assert t.bm25_search_ms > 0
+        assert t.fusion_ms > 0
+        assert t.total_ms > 0
+
+    def test_timings_semantic_has_embedding_and_vector(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """Semantic search should populate embedding_ms and vector_search_ms > 0; others remain 0."""
+        mock_db.vector_search.return_value = []
+
+        response = searcher.search("query", mode="semantic", top_k=5)
+
+        t = response.timings
+        assert t.embedding_ms > 0
+        assert t.vector_search_ms > 0
+        assert t.bm25_search_ms == 0.0
+        assert t.fusion_ms == 0.0
+        assert t.total_ms > 0
+
+    def test_timings_keyword_has_bm25_only(self, searcher: Searcher, mock_db: Mock) -> None:
+        """Keyword search should populate bm25_search_ms > 0; other phase fields remain 0."""
+        mock_db.bm25_search.return_value = []
+
+        response = searcher.search("query", mode="keyword", top_k=5)
+
+        t = response.timings
+        assert t.bm25_search_ms > 0
+        assert t.embedding_ms == 0.0
+        assert t.vector_search_ms == 0.0
+        assert t.fusion_ms == 0.0
+        assert t.total_ms > 0
+
+    def test_timings_total_gte_sum_of_parts(
+        self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
+    ) -> None:
+        """total_ms should be >= sum of all phase durations."""
+        mock_db.vector_search.return_value = []
+        mock_db.bm25_search.return_value = []
+
+        response = searcher.search("query", mode="hybrid", top_k=5)
+
+        t = response.timings
+        phase_sum = t.embedding_ms + t.vector_search_ms + t.bm25_search_ms + t.fusion_ms
+        assert t.total_ms >= phase_sum
+
+    def test_timings_to_dict_rounds_to_two_decimals(self) -> None:
+        """SearchTimings.to_dict() values should be rounded to 2 decimal places."""
+        timings = SearchTimings(
+            embedding_ms=12.3456789,
+            vector_search_ms=0.0012345,
+            bm25_search_ms=99.9999,
+            fusion_ms=1.005,
+            total_ms=113.351789,
+        )
+
+        d = timings.to_dict()
+
+        assert d["embedding_ms"] == round(12.3456789, 2)
+        assert d["vector_search_ms"] == round(0.0012345, 2)
+        assert d["bm25_search_ms"] == round(99.9999, 2)
+        assert d["fusion_ms"] == round(1.005, 2)
+        assert d["total_ms"] == round(113.351789, 2)
+        # Verify they are indeed rounded (at most 2 decimal places)
+        for key, val in d.items():
+            assert val == round(val, 2), f"{key} not rounded to 2 decimals"
+
+    def test_timings_logged_at_info_level(
+        self, searcher: Searcher, mock_db: Mock, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """After calling search(), a log record at INFO level should be emitted
+        containing the query text, mode, and timing dict."""
+        mock_db.bm25_search.return_value = []
+        mock_db.vector_search.return_value = []
+
+        import logging
+
+        with caplog.at_level(logging.INFO, logger="embecode.searcher"):
+            searcher.search("my test query", mode="keyword", top_k=5)
+
+        assert len(caplog.records) >= 1
+        record = caplog.records[-1]
+        assert record.levelno == logging.INFO
+        assert "my test query" in record.getMessage()
+        assert "keyword" in record.getMessage()
+        # Timing dict keys should appear in the message
+        assert "bm25_search_ms" in record.getMessage()

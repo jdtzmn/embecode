@@ -156,6 +156,17 @@ class Embedder:
         else:
             return self._embed_local(texts)
 
+    def unload(self) -> None:
+        """Release the loaded model from memory.
+
+        Drops the reference to the model object so the Python GC (and the
+        underlying framework, e.g. PyTorch) can free the weights.  The model
+        will be reloaded lazily on the next :meth:`embed` call, so this is safe
+        to call after a bulk indexing run when no immediate searches are
+        expected.
+        """
+        self._model = None
+
     def _embed_local(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings using local sentence-transformers model."""
         # Convert numpy arrays to Python lists for JSON serialization

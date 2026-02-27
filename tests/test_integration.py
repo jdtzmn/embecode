@@ -413,13 +413,13 @@ def multiply(a, b):
         indexer.start_full_index(background=False)
 
         # Perform semantic search
-        results = searcher.search("addition function", mode="semantic", top_k=5)
+        response = searcher.search("addition function", mode="semantic", top_k=5)
 
         # Verify results
-        assert len(results) > 0
-        assert all(isinstance(r, ChunkResult) for r in results)
-        assert all(r.file_path == str(src_file) for r in results)
-        assert all(r.language == "python" for r in results)
+        assert len(response.results) > 0
+        assert all(isinstance(r, ChunkResult) for r in response.results)
+        assert all(r.file_path == str(src_file) for r in response.results)
+        assert all(r.language == "python" for r in response.results)
 
 
 def test_search_workflow_keyword_mode():
@@ -443,11 +443,11 @@ def calculate_total(items):
         indexer.start_full_index(background=False)
 
         # Perform keyword search
-        results = searcher.search("calculate_total", mode="keyword", top_k=5)
+        response = searcher.search("calculate_total", mode="keyword", top_k=5)
 
         # Verify results
-        assert len(results) > 0
-        assert any("calculate_total" in r.content for r in results)
+        assert len(response.results) > 0
+        assert any("calculate_total" in r.content for r in response.results)
 
 
 def test_search_workflow_hybrid_mode():
@@ -474,11 +474,11 @@ def transform_input(input_str):
         indexer.start_full_index(background=False)
 
         # Perform hybrid search
-        results = searcher.search("process data", mode="hybrid", top_k=5)
+        response = searcher.search("process data", mode="hybrid", top_k=5)
 
         # Verify results
-        assert len(results) > 0
-        assert all(isinstance(r, ChunkResult) for r in results)
+        assert len(response.results) > 0
+        assert all(isinstance(r, ChunkResult) for r in response.results)
         # Hybrid mode should return results from both semantic and keyword search
 
 
@@ -505,12 +505,12 @@ def test_search_with_path_prefix_filter():
         indexer.start_full_index(background=False)
 
         # Search with path prefix filter
-        src_results = searcher.search("main", mode="hybrid", top_k=10, path="src/")
-        test_results = searcher.search("main", mode="hybrid", top_k=10, path="tests/")
+        src_response = searcher.search("main", mode="hybrid", top_k=10, path="src/")
+        test_response = searcher.search("main", mode="hybrid", top_k=10, path="tests/")
 
         # Verify filtering
-        assert all(str(src_file) in r.file_path for r in src_results)
-        assert all(str(test_file) in r.file_path for r in test_results)
+        assert all(str(src_file) in r.file_path for r in src_response.results)
+        assert all(str(test_file) in r.file_path for r in test_response.results)
 
 
 def test_search_before_indexing_raises_error():
@@ -667,9 +667,9 @@ def original_function():
         assert status1.total_chunks > 0
 
         # Step 2: Search for original content
-        results1 = searcher.search("original", mode="keyword", top_k=5)
-        assert len(results1) > 0
-        assert any("original" in r.content.lower() for r in results1)
+        response1 = searcher.search("original", mode="keyword", top_k=5)
+        assert len(response1.results) > 0
+        assert any("original" in r.content.lower() for r in response1.results)
 
         # Step 3: Update file
         src_file.write_text("""
@@ -682,9 +682,9 @@ def another_new_function():
         indexer.update_file(src_file)
 
         # Step 4: Search for new content
-        results2 = searcher.search("updated", mode="keyword", top_k=5)
-        assert len(results2) > 0
-        assert any("updated" in r.content.lower() for r in results2)
+        response2 = searcher.search("updated", mode="keyword", top_k=5)
+        assert len(response2.results) > 0
+        assert any("updated" in r.content.lower() for r in response2.results)
 
         # Step 5: Verify old content is gone (if chunk was replaced)
         status2 = indexer.get_status()
@@ -721,8 +721,8 @@ def test_complete_workflow_with_multiple_files_and_searches():
         assert indexer.get_status().files_indexed == 3
 
         # Search across all files
-        all_results = searcher.search("class", mode="keyword", top_k=10)
-        assert any("Database" in r.content for r in all_results)
+        all_response = searcher.search("class", mode="keyword", top_k=10)
+        assert any("Database" in r.content for r in all_response.results)
 
         # Update one file
         (project_path / "src/main.py").write_text("""
@@ -739,8 +739,8 @@ def main():
         assert indexer.get_status().files_indexed == 2
 
         # Search should no longer find deleted file content
-        results = searcher.search("Database", mode="keyword", top_k=10)
-        assert not any("Database" in r.content for r in results)
+        response = searcher.search("Database", mode="keyword", top_k=10)
+        assert not any("Database" in r.content for r in response.results)
 
 
 # ============================================================================
@@ -791,11 +791,11 @@ def test_search_handles_empty_results_gracefully():
         indexer.start_full_index(background=False)
 
         # Search for non-existent content
-        results = searcher.search("nonexistent_function_xyz", mode="keyword", top_k=5)
+        response = searcher.search("nonexistent_function_xyz", mode="keyword", top_k=5)
 
         # Should return empty list, not raise exception
-        assert isinstance(results, list)
-        assert len(results) == 0
+        assert isinstance(response.results, list)
+        assert len(response.results) == 0
 
 
 def test_incremental_update_handles_nonexistent_file():
@@ -892,7 +892,7 @@ def test_search_returns_limited_results():
         indexer.start_full_index(background=False)
 
         # Search with top_k limit
-        results = searcher.search("func", mode="keyword", top_k=3)
+        response = searcher.search("func", mode="keyword", top_k=3)
 
         # Should respect limit
-        assert len(results) <= 3
+        assert len(response.results) <= 3

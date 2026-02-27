@@ -611,8 +611,8 @@ class TestSearcherEdgeCases:
             embedder = Embedder(config.embeddings)
             searcher = Searcher(db, embedder)
 
-            results = searcher.search("test", mode="hybrid", top_k=0)
-            assert results == []
+            response = searcher.search("test", mode="hybrid", top_k=0)
+            assert response.results == []
 
         db.close()
 
@@ -643,8 +643,8 @@ class TestSearcherEdgeCases:
             searcher = Searcher(db, embedder)
 
             # Request 1000 results but only 2 exist
-            results = searcher.search("test", mode="hybrid", top_k=1000)
-            assert len(results) <= 2
+            response = searcher.search("test", mode="hybrid", top_k=1000)
+            assert len(response.results) <= 2
 
         db.close()
 
@@ -673,8 +673,8 @@ class TestSearcherEdgeCases:
             searcher = Searcher(db, embedder)
 
             # Query with special characters
-            results = searcher.search("function() { return 'test'; }", mode="keyword", top_k=5)
-            assert isinstance(results, list)
+            response = searcher.search("function() { return 'test'; }", mode="keyword", top_k=5)
+            assert isinstance(response.results, list)
 
         db.close()
 
@@ -703,8 +703,8 @@ class TestSearcherEdgeCases:
             searcher = Searcher(db, embedder)
 
             # Query unlikely to match anything
-            results = searcher.search("xyznonexistentquery123", mode="hybrid", top_k=5)
-            assert isinstance(results, list)
+            response = searcher.search("xyznonexistentquery123", mode="hybrid", top_k=5)
+            assert isinstance(response.results, list)
 
         db.close()
 
