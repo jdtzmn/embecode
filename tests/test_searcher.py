@@ -161,7 +161,7 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("authentication logic", mode="semantic", top_k=2)
+        response = searcher.search("authentication logic", mode="semantic", top_k=2)
 
         # Verify embedder was called
         mock_embedder.embed.assert_called_once_with(["authentication logic"])
@@ -174,11 +174,11 @@ class TestSearcher:
         )
 
         # Verify results
-        assert len(results) == 2
-        assert results[0].file_path == "src/auth.py"
-        assert results[0].score == 0.95
-        assert results[1].file_path == "src/user.py"
-        assert results[1].score == 0.85
+        assert len(response.results) == 2
+        assert response.results[0].file_path == "src/auth.py"
+        assert response.results[0].score == 0.95
+        assert response.results[1].file_path == "src/user.py"
+        assert response.results[1].score == 0.85
 
     def test_search_semantic_with_path_filter(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -218,7 +218,7 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("authenticate", mode="keyword", top_k=2)
+        response = searcher.search("authenticate", mode="keyword", top_k=2)
 
         # Verify database query
         mock_db.bm25_search.assert_called_once_with(
@@ -228,11 +228,11 @@ class TestSearcher:
         )
 
         # Verify results
-        assert len(results) == 2
-        assert results[0].file_path == "src/auth.py"
-        assert results[0].score == 10.5
-        assert results[1].file_path == "src/user.py"
-        assert results[1].score == 8.2
+        assert len(response.results) == 2
+        assert response.results[0].file_path == "src/auth.py"
+        assert response.results[0].score == 10.5
+        assert response.results[1].file_path == "src/user.py"
+        assert response.results[1].score == 8.2
 
     def test_search_keyword_with_path_filter(self, searcher: Searcher, mock_db: Mock) -> None:
         """Should apply path prefix filter for keyword search."""
@@ -312,7 +312,7 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("authentication", mode="hybrid", top_k=3)
+        response = searcher.search("authentication", mode="hybrid", top_k=3)
 
         # Verify both search methods were called (fetching 3x = 9 results each)
         mock_db.vector_search.assert_called_once()
@@ -331,15 +331,15 @@ class TestSearcher:
         #   RRF = 1/(60+2) = 0.0161
 
         # Expected order: login (0.0325), auth (0.0323), security (0.0161)
-        assert len(results) == 3
-        assert results[0].file_path == "src/login.py"
-        assert results[1].file_path == "src/auth.py"
-        assert results[2].file_path == "src/security.py"
+        assert len(response.results) == 3
+        assert response.results[0].file_path == "src/login.py"
+        assert response.results[1].file_path == "src/auth.py"
+        assert response.results[2].file_path == "src/security.py"
 
         # Verify scores are RRF scores (not original scores)
-        assert results[0].score == pytest.approx(1 / 62 + 1 / 61, abs=0.0001)
-        assert results[1].score == pytest.approx(1 / 61 + 1 / 63, abs=0.0001)
-        assert results[2].score == pytest.approx(1 / 62, abs=0.0001)
+        assert response.results[0].score == pytest.approx(1 / 62 + 1 / 61, abs=0.0001)
+        assert response.results[1].score == pytest.approx(1 / 61 + 1 / 63, abs=0.0001)
+        assert response.results[2].score == pytest.approx(1 / 62, abs=0.0001)
 
     def test_search_hybrid_with_path_filter(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -363,9 +363,9 @@ class TestSearcher:
         mock_db.vector_search.return_value = []
         mock_db.bm25_search.return_value = []
 
-        results = searcher.search("nonexistent query", mode="hybrid", top_k=5)
+        response = searcher.search("nonexistent query", mode="hybrid", top_k=5)
 
-        assert len(results) == 0
+        assert len(response.results) == 0
 
     def test_search_hybrid_one_empty_leg(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -385,12 +385,12 @@ class TestSearcher:
         ]
         mock_db.bm25_search.return_value = []
 
-        results = searcher.search("query", mode="hybrid", top_k=5)
+        response = searcher.search("query", mode="hybrid", top_k=5)
 
         # Should still return the semantic result
-        assert len(results) == 1
-        assert results[0].file_path == "src/main.py"
-        assert results[0].score == pytest.approx(1 / 61, abs=0.0001)
+        assert len(response.results) == 1
+        assert response.results[0].file_path == "src/main.py"
+        assert response.results[0].score == pytest.approx(1 / 61, abs=0.0001)
 
     def test_search_default_parameters(self, searcher: Searcher, mock_db: Mock) -> None:
         """Should use default parameters (mode=hybrid, top_k=10)."""
@@ -435,17 +435,17 @@ class TestSearcher:
         mock_db.vector_search.return_value = same_results
         mock_db.bm25_search.return_value = same_results
 
-        results = searcher.search("query", mode="hybrid", top_k=2)
+        response = searcher.search("query", mode="hybrid", top_k=2)
 
         # Should deduplicate and boost scores via RRF
         # Each result appears in both rank 1 and rank 2
         # foo: RRF = 1/(60+1) + 1/(60+1) = 2 * 1/61 = 0.0328
         # bar: RRF = 1/(60+2) + 1/(60+2) = 2 * 1/62 = 0.0323
-        assert len(results) == 2
-        assert results[0].file_path == "src/main.py"
-        assert results[1].file_path == "src/utils.py"
-        assert results[0].score == pytest.approx(2 / 61, abs=0.0001)
-        assert results[1].score == pytest.approx(2 / 62, abs=0.0001)
+        assert len(response.results) == 2
+        assert response.results[0].file_path == "src/main.py"
+        assert response.results[1].file_path == "src/utils.py"
+        assert response.results[0].score == pytest.approx(2 / 61, abs=0.0001)
+        assert response.results[1].score == pytest.approx(2 / 62, abs=0.0001)
 
     def test_search_hybrid_different_chunks_same_location(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -475,14 +475,14 @@ class TestSearcher:
             },
         ]
 
-        results = searcher.search("query", mode="hybrid", top_k=1)
+        response = searcher.search("query", mode="hybrid", top_k=1)
 
         # Should treat as duplicate and use semantic version (added first)
-        assert len(results) == 1
-        assert results[0].content == "def foo(): pass"  # From semantic
-        assert results[0].definitions == "function foo"  # From semantic
+        assert len(response.results) == 1
+        assert response.results[0].content == "def foo(): pass"  # From semantic
+        assert response.results[0].definitions == "function foo"  # From semantic
         # RRF score combines both: 1/(60+1) + 1/(60+1) = 2/61
-        assert results[0].score == pytest.approx(2 / 61, abs=0.0001)
+        assert response.results[0].score == pytest.approx(2 / 61, abs=0.0001)
 
     def test_search_hybrid_top_k_smaller_than_results(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock
@@ -514,12 +514,12 @@ class TestSearcher:
             for i in range(5)
         ]
 
-        results = searcher.search("query", mode="hybrid", top_k=3)
+        response = searcher.search("query", mode="hybrid", top_k=3)
 
         # Should return exactly 3 results
-        assert len(results) == 3
+        assert len(response.results) == 3
         # All results should have RRF scores
-        for result in results:
+        for result in response.results:
             assert result.score > 0
 
     def test_search_hybrid_rrf_k_constant(self, searcher: Searcher) -> None:
@@ -532,19 +532,19 @@ class TestSearcher:
         """Should return empty list when semantic search finds no results."""
         mock_db.vector_search.return_value = []
 
-        results = searcher.search("nonexistent", mode="semantic", top_k=5)
+        response = searcher.search("nonexistent", mode="semantic", top_k=5)
 
-        assert len(results) == 0
-        assert results == []
+        assert len(response.results) == 0
+        assert response.results == []
 
     def test_search_keyword_empty_results(self, searcher: Searcher, mock_db: Mock) -> None:
         """Should return empty list when keyword search finds no results."""
         mock_db.bm25_search.return_value = []
 
-        results = searcher.search("nonexistent", mode="keyword", top_k=5)
+        response = searcher.search("nonexistent", mode="keyword", top_k=5)
 
-        assert len(results) == 0
-        assert results == []
+        assert len(response.results) == 0
+        assert response.results == []
 
     def test_search_hybrid_large_top_k(
         self, searcher: Searcher, mock_db: Mock, mock_embedder: Mock

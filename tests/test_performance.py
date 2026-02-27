@@ -477,8 +477,8 @@ class TestSearchPerformance:
 
             metrics.start()
             for query in queries:
-                results = searcher.search(query, mode=mode, top_k=10)
-                assert isinstance(results, list)
+                response = searcher.search(query, mode=mode, top_k=10)
+                assert isinstance(response.results, list)
             metrics.stop()
 
             # Performance requirements (search should be fast)
@@ -512,8 +512,8 @@ class TestSearchPerformance:
         for i in range(num_searches):
             # Alternate between different path prefixes
             path_filter = "src/core" if i % 2 == 0 else "src/utils"
-            results = searcher.search(query, path=path_filter, top_k=10)
-            assert isinstance(results, list)
+            response = searcher.search(query, path=path_filter, top_k=10)
+            assert isinstance(response.results, list)
         metrics.stop()
 
         metrics.items_processed = num_searches
@@ -578,8 +578,8 @@ class TestEndToEndPerformance:
 
         search_metrics.start()
         for query in queries:
-            results = searcher.search(query, top_k=5)
-            assert isinstance(results, list)
+            response = searcher.search(query, top_k=5)
+            assert isinstance(response.results, list)
         search_metrics.stop()
 
         search_metrics.items_processed = len(queries)
