@@ -589,6 +589,43 @@ class TestIPCClient:
         with pytest.raises(ConnectionError, match="not connected"):
             client.search_code(query="test")
 
+    def test_index_status_owner_error(self, short_tmp: Path):
+        """index_status raises RuntimeError when owner returns an error."""
+        sock_path = short_tmp / "daemon.sock"
+        mock_embecode = _make_embecode_server_mock()
+        mock_embecode.get_index_status.side_effect = RuntimeError("Status broken")
+        srv = IPCServer(sock_path, mock_embecode)
+        srv.start()
+
+        try:
+            client = IPCClient(sock_path)
+            client.connect()
+
+            with pytest.raises(RuntimeError, match="Status broken"):
+                client.index_status()
+
+            client.close()
+        finally:
+            srv.stop()
+
+    def test_connection_drop_during_index_status(self, short_tmp: Path):
+        """index_status raises ConnectionError when owner closes mid-session."""
+        sock_path = short_tmp / "daemon.sock"
+        mock_embecode = _make_embecode_server_mock()
+        srv = IPCServer(sock_path, mock_embecode)
+        srv.start()
+
+        client = IPCClient(sock_path)
+        client.connect()
+        assert client.is_connected
+
+        # Stop the server (drops connection)
+        srv.stop()
+        time.sleep(0.1)
+
+        with pytest.raises(ConnectionError):
+            client.index_status()
+
     def test_double_close_is_safe(self, short_tmp: Path):
         """Calling close() twice does not raise."""
         sock_path = short_tmp / "daemon.sock"
@@ -602,5 +639,110 @@ class TestIPCClient:
             client.close()
             client.close()  # Should not raise
             assert not client.is_connected
+        finally:
+            srv.stop()
+
+
+# ---------------------------------------------------------------------------
+# Additional edge-case tests
+# ---------------------------------------------------------------------------
+
+
+class TestRecvExactErrors:
+    """Edge cases in _recv_exact that are hard to trigger through higher-level API."""
+
+    def test_recv_oserror_raises_connection_error(self):
+        """_recv_exact raises ConnectionError when sock.recv raises OSError."""
+        from embecode.ipc import _recv_exact
+
+        mock_sock = Mock()
+        mock_sock.recv.side_effect = OSError("network down")
+        with pytest.raises(ConnectionError, match="IPC recv error"):
+            _recv_exact(mock_sock, 10)
+
+    def test_recv_connection_reset_raises_connection_error(self):
+        """_recv_exact raises ConnectionError when sock.recv raises ConnectionResetError."""
+        from embecode.ipc import _recv_exact
+
+        mock_sock = Mock()
+        mock_sock.recv.side_effect = ConnectionResetError("reset")
+        with pytest.raises(ConnectionError, match="IPC recv error"):
+            _recv_exact(mock_sock, 10)
+
+    def test_recv_exact_mid_read_eof(self):
+        """_recv_exact raises ConnectionError on EOF after partial read."""
+        from embecode.ipc import _recv_exact
+
+        mock_sock = Mock()
+        # First call returns partial data, second call returns empty (EOF)
+        mock_sock.recv.side_effect = [b"par", b""]
+        with pytest.raises(ConnectionError, match="closed mid-read"):
+            _recv_exact(mock_sock, 10)
+
+
+class TestIPCServerEdgeCases:
+    """Edge cases in IPCServer that are hard to trigger cleanly."""
+
+    def test_stop_with_active_handler(self, short_tmp: Path):
+        """Server stop() joins active handler threads."""
+        sock_path = short_tmp / "daemon.sock"
+        # Make search_code block for a moment so we can stop while handler is active
+        block_event = threading.Event()
+
+        def slow_search(**kwargs):
+            block_event.wait(timeout=5)
+            return [{"file_path": "a.py"}]
+
+        mock_embecode = _make_embecode_server_mock()
+        mock_embecode.search_code.side_effect = slow_search
+        srv = IPCServer(sock_path, mock_embecode)
+        srv.start()
+
+        client_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            # Connect a client and send a request that will block the handler
+            client_sock.connect(str(sock_path))
+            send_message(client_sock, {"method": "search_code", "params": {"query": "slow"}})
+            time.sleep(0.2)  # Let handler accept and start processing
+
+            # There should be at least one handler thread now
+            with srv._handler_lock:
+                assert len(srv._handler_threads) >= 1
+        finally:
+            # Unblock the handler and stop
+            block_event.set()
+            client_sock.close()
+            srv.stop()
+
+    def test_stop_without_start(self, short_tmp: Path):
+        """Calling stop() without start() does not raise."""
+        sock_path = short_tmp / "daemon.sock"
+        mock_embecode = _make_embecode_server_mock()
+        srv = IPCServer(sock_path, mock_embecode)
+        srv.stop()  # Should be safe
+
+    def test_handler_catches_unexpected_exception(self, short_tmp: Path):
+        """Handler thread catches unexpected exceptions without crashing server."""
+        sock_path = short_tmp / "daemon.sock"
+        mock_embecode = _make_embecode_server_mock()
+        # Make dispatch raise something that's NOT ConnectionError/ValueError
+        mock_embecode.search_code.side_effect = TypeError("weird type error")
+        srv = IPCServer(sock_path, mock_embecode)
+        srv.start()
+
+        try:
+            client_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client_sock.connect(str(sock_path))
+            send_message(
+                client_sock,
+                {"method": "search_code", "params": {"query": "test"}},
+            )
+            # The dispatch returns an error dict (it catches Exception internally)
+            # so the handler will send back {"error": "..."} not crash
+            response = recv_message(client_sock)
+            assert response is not None
+            assert "error" in response
+            assert "weird type error" in response["error"]
+            client_sock.close()
         finally:
             srv.stop()
