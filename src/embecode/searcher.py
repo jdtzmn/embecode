@@ -110,7 +110,7 @@ class Searcher:
         mode: str = "hybrid",
         top_k: int = 10,
         path: str | None = None,
-    ) -> list[ChunkResult]:
+    ) -> SearchResponse:
         """
         Search the codebase using keyword, semantic, or hybrid search.
 
@@ -121,7 +121,7 @@ class Searcher:
             path: Optional path prefix filter (e.g., "src/", "apps/ui/").
 
         Returns:
-            List of ChunkResult objects ordered by relevance (highest score first).
+            SearchResponse with results ordered by relevance and per-phase timings.
 
         Raises:
             IndexNotReadyError: If index is empty or not ready.
@@ -139,11 +139,19 @@ class Searcher:
 
         # Execute search based on mode
         if mode == "semantic":
-            return self._search_semantic(query, top_k, path)
+            response = self._search_semantic(query, top_k, path)
         elif mode == "keyword":
-            return self._search_keyword(query, top_k, path)
+            response = self._search_keyword(query, top_k, path)
         else:  # hybrid
-            return self._search_hybrid(query, top_k, path)
+            response = self._search_hybrid(query, top_k, path)
+
+        logger.info(
+            "search query=%r mode=%s %s",
+            query,
+            mode,
+            response.timings.to_dict(),
+        )
+        return response
 
     def _is_index_ready(self) -> bool:
         """Check if index has been built and is ready for search."""
