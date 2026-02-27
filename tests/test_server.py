@@ -1141,3 +1141,305 @@ class TestRunServer:
             run_server(temp_project)
 
         assert exc_info.value.code == 1
+
+
+# ---------------------------------------------------------------------------
+# Reader proxy behaviour
+# ---------------------------------------------------------------------------
+
+
+def _make_reader_cache_manager(cache_dir: Path) -> Mock:
+    """Return a CacheManager mock whose helpers point at *cache_dir*."""
+    cm = Mock()
+    cm.get_cache_dir.return_value = cache_dir
+    cm.get_lock_path.return_value = cache_dir / "daemon.lock"
+    cm.get_socket_path.return_value = cache_dir / "daemon.sock"
+    cm.update_access_time.return_value = None
+    return cm
+
+
+def _write_owner_lock(cache_dir: Path, pid: int = 12345) -> None:
+    """Write a lock file claiming *pid* as the owner."""
+    import json
+
+    lock_path = cache_dir / "daemon.lock"
+    lock_path.write_text(json.dumps({"pid": pid}))
+
+
+class TestReaderSearchProxy:
+    """Reader process proxies search_code() calls to the owner via IPC."""
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_search_proxies_via_ipc(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Reader search_code calls IPC client and returns the owner's results."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        expected = [{"file_path": "a.py", "score": 0.9}]
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.search_code.return_value = expected
+
+        server = EmbeCodeServer(temp_project)
+        assert server._role == "reader"
+
+        results = server.search_code("hello", mode="semantic", top_k=5, path="src/")
+
+        assert results == expected
+        ipc_client.search_code.assert_called_once_with(
+            query="hello", mode="semantic", top_k=5, path="src/"
+        )
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_search_disconnected_returns_retriable_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC client is not connected, reader returns a retriable error."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = False  # not connected
+
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("hello")
+
+        assert len(results) == 1
+        assert results[0]["retry_recommended"] is True
+        assert "error" in results[0]
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_search_connection_error_returns_retriable_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC connection drops during search, reader returns retriable error."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.search_code.side_effect = ConnectionError("pipe broken")
+
+        server = EmbeCodeServer(temp_project)
+        results = server.search_code("hello")
+
+        assert len(results) == 1
+        assert results[0]["retry_recommended"] is True
+        assert "error" in results[0]
+
+
+class TestReaderIndexStatusProxy:
+    """Reader process proxies get_index_status() calls to the owner via IPC."""
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_index_status_proxies_via_ipc(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """Reader get_index_status calls IPC client and appends role=reader."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        owner_status = {
+            "files_indexed": 42,
+            "total_chunks": 200,
+            "embedding_model": "test-model",
+            "is_indexing": False,
+        }
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.index_status.return_value = dict(owner_status)
+
+        server = EmbeCodeServer(temp_project)
+        result = server.get_index_status()
+
+        assert result["files_indexed"] == 42
+        assert result["total_chunks"] == 200
+        assert result["role"] == "reader"
+        ipc_client.index_status.assert_called_once()
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_index_status_disconnected_returns_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC client is not connected, reader returns error with role=reader."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = False
+
+        server = EmbeCodeServer(temp_project)
+        result = server.get_index_status()
+
+        assert result["role"] == "reader"
+        assert "error" in result
+
+    @patch("embecode.server.IPCClient")
+    @patch("embecode.server.threading.Thread")
+    @patch("embecode.server.Indexer")
+    @patch("embecode.server.Searcher")
+    @patch("embecode.server.Embedder")
+    @patch("embecode.server.Database")
+    @patch("embecode.server.CacheManager")
+    @patch("embecode.server.load_config")
+    @patch("embecode.server.is_pid_alive", return_value=True)
+    def test_reader_index_status_connection_error_returns_error(
+        self,
+        mock_is_alive: Mock,
+        mock_load_config: Mock,
+        mock_cm_cls: Mock,
+        mock_db_cls: Mock,
+        mock_embedder_cls: Mock,
+        mock_searcher_cls: Mock,
+        mock_indexer_cls: Mock,
+        mock_thread: Mock,
+        mock_ipc_client_cls: Mock,
+        temp_project: Path,
+        mock_config: Mock,
+        mock_db: Mock,
+    ) -> None:
+        """When IPC connection drops during index_status, reader returns error."""
+        cache_dir = temp_project / ".cache"
+        cache_dir.mkdir()
+        _write_owner_lock(cache_dir)
+
+        mock_load_config.return_value = mock_config
+        mock_cm_cls.return_value = _make_reader_cache_manager(cache_dir)
+        mock_db_cls.return_value = mock_db
+
+        ipc_client = mock_ipc_client_cls.return_value
+        ipc_client.is_connected = True
+        ipc_client.index_status.side_effect = ConnectionError("owner gone")
+
+        server = EmbeCodeServer(temp_project)
+        result = server.get_index_status()
+
+        assert result["role"] == "reader"
+        assert "error" in result
