@@ -7,6 +7,7 @@ Search) and FTS (Full-Text Search) extensions for hybrid code search.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,10 @@ class Database:
 
     Uses DuckDB with VSS extension for vector similarity search and FTS extension
     for BM25 keyword search. All data is stored in a single database file.
+
+    Thread safety: all public methods acquire ``_db_lock`` before touching the
+    underlying DuckDB connection so that multiple threads (catch-up indexer,
+    file watcher, MCP request handler) can safely share a single instance.
     """
 
     def __init__(self, db_path: Path) -> None:
@@ -32,46 +37,98 @@ class Database:
         self.db_path = db_path
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._is_initialized = False
+        self._read_only = False
+        self._db_lock = threading.Lock()
 
-    def connect(self) -> None:
-        """Open database connection and initialize schema if needed."""
-        if self._conn is not None:
-            return
+    @property
+    def is_read_only(self) -> bool:
+        """Return True if the current connection was opened in read-only mode."""
+        return self._read_only
 
-        # Create parent directory if it doesn't exist
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+    def connect(self, read_only: bool = False) -> None:
+        """Open database connection and initialize schema if needed.
 
-        # Open connection
-        self._conn = duckdb.connect(str(self.db_path))
+        Args:
+            read_only: If True, open the connection in read-only mode.  A
+                read-only connection cannot write to the database but can
+                coexist with a separate read-write connection from another
+                process (DuckDB supports this).
+        """
+        with self._db_lock:
+            if self._conn is not None:
+                return
 
-        # Install and load VSS extension for vector similarity search
-        try:
-            self._conn.execute("INSTALL vss")
-            self._conn.execute("LOAD vss")
-        except Exception as e:
-            logger.warning(f"Failed to load VSS extension: {e}")
+            # Create parent directory if it doesn't exist
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Install and load FTS extension for full-text search
-        try:
-            self._conn.execute("INSTALL fts")
-            self._conn.execute("LOAD fts")
-        except Exception as e:
-            logger.warning(f"Failed to load FTS extension: {e}")
+            # Open connection
+            self._conn = duckdb.connect(str(self.db_path), read_only=read_only)
+            self._read_only = read_only
 
-        # Initialize schema if needed
-        if not self._is_initialized:
-            self._initialize_schema()
-            self._is_initialized = True
+            if not read_only:
+                # Install and load VSS extension for vector similarity search
+                try:
+                    self._conn.execute("INSTALL vss")
+                    self._conn.execute("LOAD vss")
+                except Exception as e:
+                    logger.warning(f"Failed to load VSS extension: {e}")
+
+                # Install and load FTS extension for full-text search
+                try:
+                    self._conn.execute("INSTALL fts")
+                    self._conn.execute("LOAD fts")
+                except Exception as e:
+                    logger.warning(f"Failed to load FTS extension: {e}")
+            else:
+                # Extensions are already installed; just load them
+                try:
+                    self._conn.execute("LOAD vss")
+                except Exception as e:
+                    logger.warning(f"Failed to load VSS extension (read-only): {e}")
+                try:
+                    self._conn.execute("LOAD fts")
+                except Exception as e:
+                    logger.warning(f"Failed to load FTS extension (read-only): {e}")
+
+            # Initialize schema if needed (skip in read-only mode — the owner
+            # is responsible for schema creation)
+            if not read_only and not self._is_initialized:
+                self._initialize_schema()
+                self._is_initialized = True
+
+    def reconnect(self, read_only: bool = False) -> None:
+        """Close the current connection and reopen with the given mode.
+
+        This is used during reader → owner promotion: the reader must close
+        its read-only connection before reopening read-write.
+
+        Args:
+            read_only: Mode for the new connection.
+        """
+        with self._db_lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+                self._is_initialized = False
+                self._read_only = False
+
+        # connect() acquires the lock itself, so call it outside the lock
+        self.connect(read_only=read_only)
 
     def close(self) -> None:
         """Close database connection."""
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
-            self._is_initialized = False
+        with self._db_lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+                self._is_initialized = False
+                self._read_only = False
 
     def _initialize_schema(self) -> None:
-        """Create tables and indexes if they don't exist."""
+        """Create tables and indexes if they don't exist.
+
+        Must be called with ``_db_lock`` already held (called from ``connect``).
+        """
         if self._conn is None:
             msg = "Database connection not open"
             raise RuntimeError(msg)
@@ -151,13 +208,14 @@ class Database:
     def clear_index(self) -> None:
         """Clear the entire index (delete all chunks, embeddings, and files)."""
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        self._conn.execute("DELETE FROM embeddings")
-        self._conn.execute("DELETE FROM chunks")
-        self._conn.execute("DELETE FROM files")
+            self._conn.execute("DELETE FROM embeddings")
+            self._conn.execute("DELETE FROM chunks")
+            self._conn.execute("DELETE FROM files")
 
     def get_index_stats(self) -> dict[str, Any]:
         """Get index statistics.
@@ -169,19 +227,20 @@ class Database:
             - last_updated: ISO timestamp of most recent update (or None if empty)
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        total_chunks = self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
-        files_indexed = self._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            total_chunks = self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+            files_indexed = self._conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
 
-        # Get most recent update timestamp
-        last_updated = None
-        if total_chunks > 0:
-            result = self._conn.execute("SELECT MAX(created_at) FROM chunks").fetchone()
-            if result and result[0]:
-                last_updated = result[0].isoformat()
+            # Get most recent update timestamp
+            last_updated = None
+            if total_chunks > 0:
+                result = self._conn.execute("SELECT MAX(created_at) FROM chunks").fetchone()
+                if result and result[0]:
+                    last_updated = result[0].isoformat()
 
         return {
             "total_chunks": total_chunks,
@@ -199,14 +258,15 @@ class Database:
             Set of chunk hashes (SHA1) for the file
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        result = self._conn.execute(
-            "SELECT hash FROM chunks WHERE file_path = ?",
-            [file_path],
-        ).fetchall()
+            result = self._conn.execute(
+                "SELECT hash FROM chunks WHERE file_path = ?",
+                [file_path],
+            ).fetchall()
 
         return {row[0] for row in result}
 
@@ -226,14 +286,11 @@ class Database:
                 - embedding: Vector embedding (list of floats)
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
 
         if not chunk_records:
             return
 
-        # Generate chunk IDs and prepare records
+        # Generate chunk IDs and prepare records (outside lock — pure Python work)
         now = datetime.now(UTC)
         chunk_rows = []
         embedding_rows = []
@@ -256,46 +313,51 @@ class Database:
             )
             embedding_rows.append((chunk_id, record["embedding"]))
 
-        # Check which chunks already exist (for upsert handling)
-        existing_ids = {
-            row[0]
-            for row in self._conn.execute(
-                f"SELECT id FROM chunks WHERE id IN ({','.join('?' * len(chunk_rows))})",
-                [row[0] for row in chunk_rows],
-            ).fetchall()
-        }
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        # Delete embeddings for existing chunks first (foreign key constraint)
-        if existing_ids:
-            placeholders = ",".join("?" * len(existing_ids))
-            self._conn.execute(
-                f"DELETE FROM embeddings WHERE chunk_id IN ({placeholders})",
-                list(existing_ids),
+            # Check which chunks already exist (for upsert handling)
+            existing_ids = {
+                row[0]
+                for row in self._conn.execute(
+                    f"SELECT id FROM chunks WHERE id IN ({','.join('?' * len(chunk_rows))})",
+                    [row[0] for row in chunk_rows],
+                ).fetchall()
+            }
+
+            # Delete embeddings for existing chunks first (foreign key constraint)
+            if existing_ids:
+                placeholders = ",".join("?" * len(existing_ids))
+                self._conn.execute(
+                    f"DELETE FROM embeddings WHERE chunk_id IN ({placeholders})",
+                    list(existing_ids),
+                )
+
+            # Insert/update chunks
+            self._conn.executemany(
+                """
+                INSERT INTO chunks (id, file_path, language, start_line, end_line,
+                                  content, context, hash, definitions, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (id) DO UPDATE SET
+                    content = excluded.content,
+                    hash = excluded.hash,
+                    definitions = excluded.definitions,
+                    created_at = excluded.created_at
+                """,
+                chunk_rows,
             )
 
-        # Insert/update chunks
-        self._conn.executemany(
-            """
-            INSERT INTO chunks (id, file_path, language, start_line, end_line,
-                              content, context, hash, definitions, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT (id) DO UPDATE SET
-                content = excluded.content,
-                hash = excluded.hash,
-                definitions = excluded.definitions,
-                created_at = excluded.created_at
-            """,
-            chunk_rows,
-        )
-
-        # Insert embeddings (all new after deletion above)
-        self._conn.executemany(
-            """
-            INSERT INTO embeddings (chunk_id, embedding)
-            VALUES (?, ?)
-            """,
-            embedding_rows,
-        )
+            # Insert embeddings (all new after deletion above)
+            self._conn.executemany(
+                """
+                INSERT INTO embeddings (chunk_id, embedding)
+                VALUES (?, ?)
+                """,
+                embedding_rows,
+            )
 
     def delete_chunks_by_hash(self, hashes: list[str]) -> None:
         """Delete chunks by their hashes.
@@ -304,38 +366,40 @@ class Database:
             hashes: List of SHA1 hashes to delete
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
 
         if not hashes:
             return
 
-        # Get chunk IDs to delete
-        placeholders = ",".join("?" * len(hashes))
-        chunk_ids = self._conn.execute(
-            f"SELECT id FROM chunks WHERE hash IN ({placeholders})",
-            hashes,
-        ).fetchall()
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        if not chunk_ids:
-            return
+            # Get chunk IDs to delete
+            placeholders = ",".join("?" * len(hashes))
+            chunk_ids = self._conn.execute(
+                f"SELECT id FROM chunks WHERE hash IN ({placeholders})",
+                hashes,
+            ).fetchall()
 
-        chunk_id_list = [row[0] for row in chunk_ids]
+            if not chunk_ids:
+                return
 
-        # Delete embeddings first (foreign key constraint)
-        placeholders = ",".join("?" * len(chunk_id_list))
-        self._conn.execute(
-            f"DELETE FROM embeddings WHERE chunk_id IN ({placeholders})",
-            chunk_id_list,
-        )
+            chunk_id_list = [row[0] for row in chunk_ids]
 
-        # Delete chunks
-        placeholders = ",".join("?" * len(hashes))
-        self._conn.execute(
-            f"DELETE FROM chunks WHERE hash IN ({placeholders})",
-            hashes,
-        )
+            # Delete embeddings first (foreign key constraint)
+            placeholders = ",".join("?" * len(chunk_id_list))
+            self._conn.execute(
+                f"DELETE FROM embeddings WHERE chunk_id IN ({placeholders})",
+                chunk_id_list,
+            )
+
+            # Delete chunks
+            placeholders = ",".join("?" * len(hashes))
+            self._conn.execute(
+                f"DELETE FROM chunks WHERE hash IN ({placeholders})",
+                hashes,
+            )
 
     def delete_chunks_by_file(self, file_path: str) -> None:
         """Delete all chunks for a specific file.
@@ -344,33 +408,34 @@ class Database:
             file_path: Path to the file
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        # Get chunk IDs to delete
-        chunk_ids = self._conn.execute(
-            "SELECT id FROM chunks WHERE file_path = ?",
-            [file_path],
-        ).fetchall()
+            # Get chunk IDs to delete
+            chunk_ids = self._conn.execute(
+                "SELECT id FROM chunks WHERE file_path = ?",
+                [file_path],
+            ).fetchall()
 
-        if not chunk_ids:
-            return
+            if not chunk_ids:
+                return
 
-        chunk_id_list = [row[0] for row in chunk_ids]
+            chunk_id_list = [row[0] for row in chunk_ids]
 
-        # Delete embeddings first (foreign key constraint)
-        placeholders = ",".join("?" * len(chunk_id_list))
-        self._conn.execute(
-            f"DELETE FROM embeddings WHERE chunk_id IN ({placeholders})",
-            chunk_id_list,
-        )
+            # Delete embeddings first (foreign key constraint)
+            placeholders = ",".join("?" * len(chunk_id_list))
+            self._conn.execute(
+                f"DELETE FROM embeddings WHERE chunk_id IN ({placeholders})",
+                chunk_id_list,
+            )
 
-        # Delete chunks
-        self._conn.execute(
-            "DELETE FROM chunks WHERE file_path = ?",
-            [file_path],
-        )
+            # Delete chunks
+            self._conn.execute(
+                "DELETE FROM chunks WHERE file_path = ?",
+                [file_path],
+            )
 
     def update_file_metadata(self, file_path: str, chunk_count: int) -> None:
         """Update file metadata after indexing.
@@ -380,21 +445,22 @@ class Database:
             chunk_count: Number of chunks for this file
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        now = datetime.now(UTC)
-        self._conn.execute(
-            """
-            INSERT INTO files (path, chunk_count, last_indexed)
-            VALUES (?, ?, ?)
-            ON CONFLICT (path) DO UPDATE SET
-                chunk_count = excluded.chunk_count,
-                last_indexed = excluded.last_indexed
-            """,
-            [file_path, chunk_count, now],
-        )
+            now = datetime.now(UTC)
+            self._conn.execute(
+                """
+                INSERT INTO files (path, chunk_count, last_indexed)
+                VALUES (?, ?, ?)
+                ON CONFLICT (path) DO UPDATE SET
+                    chunk_count = excluded.chunk_count,
+                    last_indexed = excluded.last_indexed
+                """,
+                [file_path, chunk_count, now],
+            )
 
     def delete_file(self, file_path: str) -> int:
         """Delete all chunks for a file and return count deleted.
@@ -406,25 +472,31 @@ class Database:
             Number of chunks deleted
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        # Get count before deletion
-        count_result = self._conn.execute(
-            "SELECT COUNT(*) FROM chunks WHERE file_path = ?",
-            [file_path],
-        ).fetchone()
-        count_before = count_result[0] if count_result else 0
+            # Get count before deletion
+            count_result = self._conn.execute(
+                "SELECT COUNT(*) FROM chunks WHERE file_path = ?",
+                [file_path],
+            ).fetchone()
+            count_before = count_result[0] if count_result else 0
 
-        # Delete chunks (embeddings cascade)
+        # delete_chunks_by_file acquires the lock itself — call outside lock
         self.delete_chunks_by_file(file_path)
 
-        # Delete file metadata
-        self._conn.execute(
-            "DELETE FROM files WHERE path = ?",
-            [file_path],
-        )
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
+
+            # Delete file metadata
+            self._conn.execute(
+                "DELETE FROM files WHERE path = ?",
+                [file_path],
+            )
 
         return count_before
 
@@ -453,12 +525,9 @@ class Database:
             - score: Similarity score (higher is better)
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
 
-        # Build query with optional path filter
-        query = """
+        # Build query with optional path filter (pure Python — outside lock)
+        sql = """
             SELECT
                 c.content,
                 c.file_path,
@@ -475,18 +544,23 @@ class Database:
         params: list[Any] = [query_embedding]
 
         if path_prefix:
-            query += " WHERE c.file_path LIKE ?"
+            sql += " WHERE c.file_path LIKE ?"
             params.append(f"{path_prefix}%")
 
-        query += " ORDER BY score DESC LIMIT ?"
+        sql += " ORDER BY score DESC LIMIT ?"
         params.append(top_k)
 
-        try:
-            results = self._conn.execute(query, params).fetchall()
-        except Exception as e:
-            logger.warning(f"Vector search failed: {e}")
-            # Fall back to no results if VSS extension is not available
-            return []
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
+
+            try:
+                results = self._conn.execute(sql, params).fetchall()
+            except Exception as e:
+                logger.warning(f"Vector search failed: {e}")
+                # Fall back to no results if VSS extension is not available
+                return []
 
         return [
             {
@@ -527,64 +601,72 @@ class Database:
             - score: BM25 relevance score (higher is better)
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
 
-        # Build FTS query with optional path filter
-        try:
-            if path_prefix:
-                fts_query = """
-                    SELECT
-                        c.content,
-                        c.file_path,
-                        c.language,
-                        c.start_line,
-                        c.end_line,
-                        c.context,
-                        c.definitions,
-                        fts.score
-                    FROM (
-                        SELECT fts_main_chunks.match_bm25(id, ?) AS score, id
-                        FROM chunks
-                    ) fts
-                    JOIN chunks c ON c.id = fts.id
-                    WHERE fts.score IS NOT NULL AND c.file_path LIKE ?
-                    ORDER BY fts.score DESC
-                    LIMIT ?
-                """
-                params = [query, f"{path_prefix}%", top_k]
-            else:
-                fts_query = """
-                    SELECT
-                        c.content,
-                        c.file_path,
-                        c.language,
-                        c.start_line,
-                        c.end_line,
-                        c.context,
-                        c.definitions,
-                        fts.score
-                    FROM (
-                        SELECT fts_main_chunks.match_bm25(id, ?) AS score, id
-                        FROM chunks
-                    ) fts
-                    JOIN chunks c ON c.id = fts.id
-                    WHERE fts.score IS NOT NULL
-                    ORDER BY fts.score DESC
-                    LIMIT ?
-                """
-                params = [query, top_k]
+        # Build FTS query with optional path filter (pure Python — outside lock)
+        if path_prefix:
+            fts_query = """
+                SELECT
+                    c.content,
+                    c.file_path,
+                    c.language,
+                    c.start_line,
+                    c.end_line,
+                    c.context,
+                    c.definitions,
+                    fts.score
+                FROM (
+                    SELECT fts_main_chunks.match_bm25(id, ?) AS score, id
+                    FROM chunks
+                ) fts
+                JOIN chunks c ON c.id = fts.id
+                WHERE fts.score IS NOT NULL AND c.file_path LIKE ?
+                ORDER BY fts.score DESC
+                LIMIT ?
+            """
+            fts_params: list[Any] = [query, f"{path_prefix}%", top_k]
+        else:
+            fts_query = """
+                SELECT
+                    c.content,
+                    c.file_path,
+                    c.language,
+                    c.start_line,
+                    c.end_line,
+                    c.context,
+                    c.definitions,
+                    fts.score
+                FROM (
+                    SELECT fts_main_chunks.match_bm25(id, ?) AS score, id
+                    FROM chunks
+                ) fts
+                JOIN chunks c ON c.id = fts.id
+                WHERE fts.score IS NOT NULL
+                ORDER BY fts.score DESC
+                LIMIT ?
+            """
+            fts_params = [query, top_k]
 
-            results = self._conn.execute(fts_query, params).fetchall()
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-            # If FTS returns no results, fall back to substring search
-            if not results:
-                logger.debug("FTS returned no results, falling back to substring search")
-                return self._fallback_keyword_search(query, top_k, path_prefix)
-        except Exception as e:
-            logger.warning(f"BM25 search failed: {e}")
-            # Fall back to simple substring search if FTS is not available
+            try:
+                results = self._conn.execute(fts_query, fts_params).fetchall()
+
+                # If FTS returns no results, fall back to substring search
+                if not results:
+                    logger.debug("FTS returned no results, falling back to substring search")
+                    # _fallback_keyword_search acquires the lock itself — call
+                    # outside the lock
+                    results = None
+            except Exception as e:
+                logger.warning(f"BM25 search failed: {e}")
+                results = None
+
+        if results is None:
+            # Fall back to simple substring search if FTS is not available or
+            # returned no results
             return self._fallback_keyword_search(query, top_k, path_prefix)
 
         return [
@@ -611,14 +693,15 @@ class Database:
             The value if found, None otherwise
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        result = self._conn.execute(
-            "SELECT value FROM metadata WHERE key = ?",
-            [key],
-        ).fetchone()
+            result = self._conn.execute(
+                "SELECT value FROM metadata WHERE key = ?",
+                [key],
+            ).fetchone()
 
         return result[0] if result else None
 
@@ -630,19 +713,20 @@ class Database:
             value: Metadata value
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        self._conn.execute(
-            """
-            INSERT INTO metadata (key, value)
-            VALUES (?, ?)
-            ON CONFLICT (key) DO UPDATE SET
-                value = excluded.value
-            """,
-            [key, value],
-        )
+            self._conn.execute(
+                """
+                INSERT INTO metadata (key, value)
+                VALUES (?, ?)
+                ON CONFLICT (key) DO UPDATE SET
+                    value = excluded.value
+                """,
+                [key, value],
+            )
 
     def get_indexed_file_paths(self) -> set[str]:
         """Get all indexed file paths.
@@ -651,11 +735,13 @@ class Database:
             Set of all file paths in the files table
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        result = self._conn.execute("SELECT path FROM files").fetchall()
+            result = self._conn.execute("SELECT path FROM files").fetchall()
+
         return {row[0] for row in result}
 
     def get_indexed_files_with_timestamps(self) -> dict[str, datetime]:
@@ -665,11 +751,13 @@ class Database:
             Dictionary mapping file paths to their last_indexed datetime (UTC)
         """
         self.connect()
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
 
-        result = self._conn.execute("SELECT path, last_indexed FROM files").fetchall()
+            result = self._conn.execute("SELECT path, last_indexed FROM files").fetchall()
+
         return {row[0]: row[1] for row in result}
 
     def _fallback_keyword_search(
@@ -688,10 +776,6 @@ class Database:
         Returns:
             List of search results (same format as bm25_search)
         """
-        if self._conn is None:
-            msg = "Database connection not open"
-            raise RuntimeError(msg)
-
         query_sql = """
             SELECT content, file_path, language, start_line, end_line, context, definitions
             FROM chunks
@@ -707,7 +791,12 @@ class Database:
         query_sql += " LIMIT ?"
         params.append(top_k)
 
-        results = self._conn.execute(query_sql, params).fetchall()
+        with self._db_lock:
+            if self._conn is None:
+                msg = "Database connection not open"
+                raise RuntimeError(msg)
+
+            results = self._conn.execute(query_sql, params).fetchall()
 
         return [
             {
