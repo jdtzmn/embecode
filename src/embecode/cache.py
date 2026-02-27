@@ -7,7 +7,8 @@ Cache structure:
         registry.json          # metadata for all cached projects
         a3f9b2c1/              # hash of /Users/john/projects/myapp
             index.db           # DuckDB file (chunks, embeddings, FTS index)
-            daemon.lock        # PID lock file (reserved for v2 daemon)
+            daemon.lock        # PID lock file for owner election
+            daemon.sock        # Unix domain socket for IPC (owner ↔ readers)
 """
 
 import hashlib
@@ -296,6 +297,22 @@ class CacheManager:
         """
         cache_dir = self.get_cache_dir(project_path)
         return cache_dir / "daemon.lock"
+
+    def get_socket_path(self, project_path: str | Path) -> Path:
+        """Get the daemon IPC socket path for a project.
+
+        Args:
+            project_path: Absolute path to the project
+
+        Returns:
+            Path to the daemon.sock file for this project's cache directory.
+            The socket file lives at ~/.cache/embecode/<hash>/daemon.sock.
+            Note: Unix domain socket paths are limited to 104 bytes on macOS
+            and 108 bytes on Linux. For typical home directory paths, this
+            path is well within the limit.
+        """
+        cache_dir = self.get_cache_dir(project_path)
+        return cache_dir / "daemon.sock"
 
     @staticmethod
     def _hash_path(path: str) -> str:

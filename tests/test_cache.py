@@ -548,3 +548,36 @@ class TestCacheEdgeCases:
         # Registry entry should be removed
         registry = cache_manager._load_registry()
         assert cache_dir.name not in registry
+
+    def test_get_lock_path(self, cache_manager: CacheManager, project_dir: Path) -> None:
+        """Test getting lock file path for a project."""
+        lock_path = cache_manager.get_lock_path(project_dir)
+
+        # Should be daemon.lock inside the project's cache directory
+        assert lock_path.name == "daemon.lock"
+        assert lock_path.parent == cache_manager.get_cache_dir(project_dir)
+
+    def test_get_socket_path(self, cache_manager: CacheManager, project_dir: Path) -> None:
+        """Test getting socket file path for a project."""
+        socket_path = cache_manager.get_socket_path(project_dir)
+
+        # Should be daemon.sock inside the project's cache directory
+        assert socket_path.name == "daemon.sock"
+        assert socket_path.parent == cache_manager.get_cache_dir(project_dir)
+
+    def test_get_socket_path_same_cache_dir_as_lock(
+        self, cache_manager: CacheManager, project_dir: Path
+    ) -> None:
+        """Test that socket and lock paths share the same cache directory."""
+        lock_path = cache_manager.get_lock_path(project_dir)
+        socket_path = cache_manager.get_socket_path(project_dir)
+
+        assert lock_path.parent == socket_path.parent
+
+    def test_get_socket_path_deterministic(
+        self, cache_manager: CacheManager, project_dir: Path
+    ) -> None:
+        """Test that socket path is deterministic for the same project."""
+        path1 = cache_manager.get_socket_path(project_dir)
+        path2 = cache_manager.get_socket_path(project_dir)
+        assert path1 == path2
