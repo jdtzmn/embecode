@@ -14,9 +14,8 @@ from __future__ import annotations
 import json
 import os
 import threading
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, call, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -25,7 +24,6 @@ from embecode.server import (
     _cleanup_lock,
     is_pid_alive,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -842,7 +840,7 @@ class TestDatabaseThreadSafety:
 
         assert errors == [], f"Thread safety errors: {errors}"
         stats = db.get_index_stats()
-        assert stats["total_chunks"] == 25  # 5 threads × 5 chunks each
+        assert stats["total_chunks"] == 25  # 5 threads x 5 chunks each
         db.close()
 
     def test_concurrent_reads_and_writes_do_not_raise(self, tmp_path: Path) -> None:

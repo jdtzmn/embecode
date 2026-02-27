@@ -100,7 +100,7 @@ def _pick_preview_lines(
 
                 # Second line: nearest other match, or nearest non-empty line
                 second: tuple[int, str] | None = None
-                other_matches = [(i, l) for i, l, c in scored if i != best_idx]
+                other_matches = [(i, line) for i, line, c in scored if i != best_idx]
                 if other_matches:
                     second = min(other_matches, key=lambda t: abs(t[0] - best_idx))
                 else:
@@ -124,7 +124,7 @@ def _pick_preview_lines(
 
     # Fallback: first 2 non-empty lines
     if picked is None:
-        non_empty = [(i, l) for i, l in enumerate(all_lines) if l.strip()]
+        non_empty = [(i, line) for i, line in enumerate(all_lines) if line.strip()]
         picked = non_empty[:2]
 
     preview = "\n".join(line for _, line in picked)

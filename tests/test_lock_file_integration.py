@@ -24,11 +24,8 @@ import os
 import time
 from pathlib import Path
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
-# Worker functions – run in forked subprocesses
+# Worker functions - run in forked subprocesses
 # ---------------------------------------------------------------------------
 # All worker functions write their result to a JSON file and signal readiness
 # via a multiprocessing.Event.  They accept a ``stop_event`` to exit cleanly.
@@ -192,14 +189,12 @@ def _worker_reader_then_promote(
 
         # Poll: wait for lock to disappear or become stale, then promote
         deadline = time.time() + 25
-        promoted = False
         while time.time() < deadline and not stop_event.is_set():
             if not lock_path.exists():
                 try:
                     server._promote_to_owner()
                 except Exception:
                     pass
-                promoted = True
                 break
             else:
                 try:
@@ -214,7 +209,6 @@ def _worker_reader_then_promote(
                             server._promote_to_owner()
                         except Exception:
                             pass
-                        promoted = True
                         break
                 except (OSError, json.JSONDecodeError):
                     pass
@@ -326,7 +320,7 @@ class TestTwoProcessScenario:
         assert owner_result["role"] == "owner", f"Expected owner role, got: {owner_result}"
 
         # Now start a reader (the lock file exists with the owner's live PID)
-        reader_proc, reader_init_file, reader_final_file, reader_ready, reader_stop = (
+        reader_proc, reader_init_file, _reader_final_file, reader_ready, reader_stop = (
             _start_reader_watcher(tmp_path, cache_dir, project_dir, idx=0)
         )
         assert reader_ready.wait(timeout=15), "Reader did not start in time"
@@ -455,7 +449,7 @@ class TestRaceCondition:
             readers.append((proc, init_file, final_file, ready, stop))
 
         # Wait for all readers to be ready
-        for proc, init_file, final_file, ready, stop in readers:
+        for _proc, init_file, _final_file, ready, _stop in readers:
             assert ready.wait(timeout=15), "A reader did not start in time"
             init_result = _wait_for_result(init_file)
             assert init_result["initial_role"] == "reader", f"Expected reader, got: {init_result}"
@@ -478,13 +472,13 @@ class TestRaceCondition:
         # Signal all readers to exit their polling loops so they write final files.
         # Workers write final_result_file BEFORE entering stop_event.wait(), so
         # the files should appear very quickly once stop is set.
-        for proc, init_file, final_file, ready, stop in readers:
+        for _proc, _init_file, _final_file, _ready, stop in readers:
             stop.set()
 
         # Collect final roles
         final_roles = []
         final_pids = []
-        for proc, init_file, final_file, ready, stop in readers:
+        for proc, _init_file, final_file, _ready, _stop in readers:
             try:
                 final_result = _wait_for_result(final_file, timeout=15)
                 final_roles.append(final_result.get("final_role"))
@@ -586,12 +580,12 @@ class TestCrashRecovery:
             workers.append((proc, result_file, ready, stop))
 
         roles = []
-        for proc, result_file, ready, stop in workers:
+        for _proc, result_file, ready, _stop in workers:
             assert ready.wait(timeout=15), "A process did not start in time"
             result = _wait_for_result(result_file)
             roles.append(result.get("role"))
 
-        for proc, result_file, ready, stop in workers:
+        for proc, _result_file, _ready, stop in workers:
             stop.set()
             proc.join(timeout=5)
 

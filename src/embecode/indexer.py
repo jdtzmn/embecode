@@ -556,7 +556,7 @@ class Indexer:
             ancestor_dirs.append(current)
 
         # Also check project root
-        all_dirs = [self.project_path] + ancestor_dirs
+        all_dirs = [self.project_path, *ancestor_dirs]
 
         # Track the final match result across all .gitignore files
         # None = no match yet, True = ignored, False = negated (not ignored)
@@ -646,7 +646,7 @@ class Indexer:
             ancestor_dirs.append(current)
 
         # Also check project root
-        all_dirs = [self.project_path] + ancestor_dirs
+        all_dirs = [self.project_path, *ancestor_dirs]
 
         # Track the final match result across all .gitignore files
         final_match: bool | None = None
