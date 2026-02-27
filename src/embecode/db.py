@@ -44,6 +44,14 @@ class Database:
         # Open connection
         self._conn = duckdb.connect(str(self.db_path))
 
+        # Cap DuckDB's buffer pool so it doesn't consume all available RAM.
+        # Without this, DuckDB defaults to ~80% of system RAM and never shrinks
+        # its buffer pool voluntarily, causing the post-indexing memory floor.
+        try:
+            self._conn.execute("SET memory_limit='2GB'")
+        except Exception as e:
+            logger.warning(f"Failed to set DuckDB memory limit: {e}")
+
         # Install and load VSS extension for vector similarity search
         try:
             self._conn.execute("INSTALL vss")
@@ -69,6 +77,26 @@ class Database:
             self._conn.close()
             self._conn = None
             self._is_initialized = False
+
+    def shrink_memory(self) -> None:
+        """Release DuckDB's buffer pool pages back to the OS after a bulk write.
+
+        DuckDB retains its buffer pool indefinitely by default, which causes a
+        large memory footprint to persist after indexing completes. Calling
+        ``CHECKPOINT`` flushes dirty pages to disk, and ``PRAGMA shrink_memory``
+        asks DuckDB to evict clean pages from the buffer pool so the OS can
+        reclaim them.
+        """
+        if self._conn is None:
+            return
+        try:
+            self._conn.execute("CHECKPOINT")
+        except Exception as e:
+            logger.warning(f"Failed to checkpoint DuckDB: {e}")
+        try:
+            self._conn.execute("PRAGMA shrink_memory")
+        except Exception as e:
+            logger.warning(f"Failed to shrink DuckDB memory: {e}")
 
     def _initialize_schema(self) -> None:
         """Create tables and indexes if they don't exist."""
