@@ -157,17 +157,21 @@ class ChunkResult:
         """Generate a 2-line preview, preferring lines matching query terms."""
         return _pick_preview_lines(self.content, query)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, query: str | None = None) -> dict:
         """Convert result to concise dictionary for API responses (no full content)."""
-        return {
+        match_lines = _find_match_lines(self.content, query, self.start_line) if query else []
+        result = {
             "file_path": self.file_path,
             "language": self.language,
             "start_line": self.start_line,
             "end_line": self.end_line,
             "definitions": self.definitions,
-            "preview": self.preview(),
+            "preview": self.preview(query),
             "score": self.score,
         }
+        if match_lines:
+            result["match_lines"] = match_lines
+        return result
 
 
 @dataclass

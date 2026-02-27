@@ -409,7 +409,7 @@ class EmbeCodeServer:
 
         try:
             response = self.searcher.search(query, mode=mode, top_k=top_k, path=path)
-            return [result.to_dict() for result in response.results]
+            return [result.to_dict(query=query) for result in response.results]
         except IndexNotReadyError as e:
             # Get progress if indexing is in progress
             status = self.indexer.get_status()

@@ -905,3 +905,60 @@ class TestChunkResultPreviewWithQuery:
             score=0.5,
         )
         assert result.preview() == "first line\nsecond line"
+
+    def test_to_dict_with_query_has_match_lines(self) -> None:
+        """to_dict(query=...) includes match_lines when there are lexical matches."""
+        result = ChunkResult(
+            content="import os\ndef foo(): pass\nreturn foo\n",
+            file_path="test.py",
+            language="python",
+            start_line=10,
+            end_line=12,
+            definitions="",
+            score=0.5,
+        )
+        d = result.to_dict(query="foo")
+        assert "match_lines" in d
+        assert d["match_lines"] == [11, 12]
+
+    def test_to_dict_without_query_no_match_lines(self) -> None:
+        """to_dict() without query omits match_lines key entirely."""
+        result = ChunkResult(
+            content="import os\ndef foo(): pass\n",
+            file_path="test.py",
+            language="python",
+            start_line=1,
+            end_line=2,
+            definitions="",
+            score=0.5,
+        )
+        d = result.to_dict()
+        assert "match_lines" not in d
+
+    def test_to_dict_match_lines_omitted_when_empty(self) -> None:
+        """to_dict(query=...) omits match_lines when no tokens match content."""
+        result = ChunkResult(
+            content="def verify_credentials():\n    pass\n",
+            file_path="test.py",
+            language="python",
+            start_line=1,
+            end_line=2,
+            definitions="",
+            score=0.5,
+        )
+        d = result.to_dict(query="authentication logic")
+        assert "match_lines" not in d
+
+    def test_to_dict_with_query_uses_match_aware_preview(self) -> None:
+        """to_dict(query=...) generates a match-aware preview."""
+        result = ChunkResult(
+            content="import os\nimport sys\ndef UserAvatar(): pass\n",
+            file_path="test.py",
+            language="python",
+            start_line=1,
+            end_line=3,
+            definitions="",
+            score=0.5,
+        )
+        d = result.to_dict(query="UserAvatar")
+        assert "UserAvatar" in d["preview"]
