@@ -83,20 +83,17 @@ class Database:
 
         DuckDB retains its buffer pool indefinitely by default, which causes a
         large memory footprint to persist after indexing completes. Calling
-        ``CHECKPOINT`` flushes dirty pages to disk, and ``PRAGMA shrink_memory``
-        asks DuckDB to evict clean pages from the buffer pool so the OS can
-        reclaim them.
+        ``checkpoint()`` flushes all dirty buffer-pool pages to the ``.db``
+        file so the OS can reclaim the backing physical RAM.  The
+        ``memory_limit`` set in :meth:`connect` then prevents the pool from
+        refilling beyond 2 GB on subsequent reads.
         """
         if self._conn is None:
             return
         try:
-            self._conn.execute("CHECKPOINT")
+            self._conn.checkpoint()
         except Exception as e:
             logger.warning(f"Failed to checkpoint DuckDB: {e}")
-        try:
-            self._conn.execute("PRAGMA shrink_memory")
-        except Exception as e:
-            logger.warning(f"Failed to shrink DuckDB memory: {e}")
 
     def _initialize_schema(self) -> None:
         """Create tables and indexes if they don't exist."""
