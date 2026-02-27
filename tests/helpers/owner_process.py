@@ -29,7 +29,7 @@ def main() -> None:
 
     db = Database(db_path)
     try:
-        db.connect(read_only=False)
+        db.connect()
         # Signal the parent that the read-write connection is open and held
         print("ready", flush=True)
         # Block until the parent closes our stdin (i.e. the test is done)

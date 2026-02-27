@@ -67,7 +67,6 @@ def _worker_owner(
         db.set_metadata.return_value = None
         db.connect.return_value = None
         db.close.return_value = None
-        db.reconnect.return_value = None
         db._conn = object()
         return db
 
@@ -150,7 +149,6 @@ def _worker_reader_then_promote(
         db.set_metadata.return_value = None
         db.connect.return_value = None
         db.close.return_value = None
-        db.reconnect.return_value = None
         db._conn = object()
         return db
 

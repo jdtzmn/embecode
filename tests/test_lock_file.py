@@ -3,9 +3,8 @@
 Covers:
 - Lock file creation (atomic, first-wins)
 - Stale lock detection (dead PID → cleaned up)
-- Reader role (read-only DB, no indexer/watcher started)
+- Reader role (no DB connection, no indexer/watcher started)
 - Thread safety (concurrent DB operations)
-- DB reconnect (read-only → read-write transition)
 - Cleanup (daemon.lock removed on clean owner shutdown)
 """
 
@@ -55,8 +54,7 @@ def _make_db_mock(stored_model: str | None = None) -> Mock:
     db.set_metadata.return_value = None
     db.connect.return_value = None
     db.close.return_value = None
-    db.reconnect.return_value = None
-    db._conn = object()  # non-None so mid-reconnect guard passes
+    db._conn = object()  # non-None so mid-promotion guard passes
     return db
 
 
@@ -228,7 +226,7 @@ class TestLockAcquisitionOwner:
 
         EmbeCodeServer(temp_project)
 
-        db_mock.connect.assert_called_once_with(read_only=False)
+        db_mock.connect.assert_called_once_with()
 
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
@@ -313,7 +311,7 @@ class TestLockAcquisitionReader:
     @patch("embecode.server.CacheManager")
     @patch("embecode.server.load_config")
     @patch("embecode.server.is_pid_alive", return_value=True)
-    def test_reader_opens_db_read_only(
+    def test_reader_does_not_open_db(
         self,
         mock_is_alive: Mock,
         mock_load_config: Mock,
@@ -326,6 +324,7 @@ class TestLockAcquisitionReader:
         temp_project: Path,
         temp_cache_dir: Path,
     ) -> None:
+        """Reader must not open DuckDB — queries are proxied via IPC."""
         self._write_lock(temp_cache_dir, pid=12345)
 
         mock_load_config.return_value = _make_config_mock()
@@ -335,7 +334,7 @@ class TestLockAcquisitionReader:
 
         EmbeCodeServer(temp_project)
 
-        db_mock.connect.assert_called_once_with(read_only=True)
+        db_mock.connect.assert_not_called()
 
     @patch("embecode.server.threading.Thread")
     @patch("embecode.server.Indexer")
@@ -738,66 +737,6 @@ class TestMidReconnectGuard:
 
 
 # ---------------------------------------------------------------------------
-# DB reconnect: read-only → read-write
-# ---------------------------------------------------------------------------
-
-
-class TestDatabaseReconnect:
-    """Database.reconnect() transitions between modes correctly."""
-
-    def test_reconnect_closes_and_reopens_read_write(self, tmp_path: Path) -> None:
-        from embecode.db import Database
-
-        db_path = tmp_path / "test.db"
-        db = Database(db_path)
-        db.connect(read_only=False)
-
-        assert db.is_read_only is False
-        assert db._conn is not None
-
-        # Reconnect — same mode
-        db.reconnect(read_only=False)
-
-        assert db._conn is not None
-        assert db.is_read_only is False
-        db.close()
-
-    def test_reconnect_idempotent_when_conn_already_none(self, tmp_path: Path) -> None:
-        """reconnect() must not crash if called on an unconnected Database."""
-        from embecode.db import Database
-
-        db_path = tmp_path / "test2.db"
-        db = Database(db_path)
-
-        # No connect() called yet — _conn is None
-        # reconnect() should still work (opens fresh connection)
-        db.reconnect(read_only=False)
-
-        assert db._conn is not None
-        assert db.is_read_only is False
-        db.close()
-
-    def test_is_read_only_property_reflects_mode(self, tmp_path: Path) -> None:
-        from embecode.db import Database
-
-        db_path = tmp_path / "test3.db"
-        db = Database(db_path)
-
-        db.connect(read_only=False)
-        assert db.is_read_only is False
-
-        # Close and reopen as read-only  (need a second connection from same process?
-        # DuckDB read-only requires the file to exist already from the first open)
-        db.close()
-
-        # Re-open as read-only (file already exists)
-        db.connect(read_only=True)
-        assert db.is_read_only is True
-
-        db.close()
-
-
-# ---------------------------------------------------------------------------
 # Thread safety: concurrent DB operations
 # ---------------------------------------------------------------------------
 
@@ -811,7 +750,7 @@ class TestDatabaseThreadSafety:
 
         db_path = tmp_path / "concurrent.db"
         db = Database(db_path)
-        db.connect(read_only=False)
+        db.connect()
 
         errors: list[Exception] = []
 
@@ -851,7 +790,7 @@ class TestDatabaseThreadSafety:
 
         db_path = tmp_path / "rw_concurrent.db"
         db = Database(db_path)
-        db.connect(read_only=False)
+        db.connect()
 
         # Pre-populate
         db.insert_chunks(

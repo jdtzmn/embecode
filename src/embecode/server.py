@@ -89,8 +89,8 @@ class EmbeCodeServer:
 
     On startup the server attempts to acquire ``daemon.lock`` atomically.  The
     first process to succeed becomes the **owner** (read-write DB, indexer,
-    file watcher).  All other processes become **readers** (read-only DB, lock
-    file watcher for promotion).
+    file watcher).  All other processes become **readers** (no DB connection;
+    queries are proxied to the owner via IPC, lock file watcher for promotion).
     """
 
     def __init__(self, project_path: Path) -> None:
@@ -213,7 +213,7 @@ class EmbeCodeServer:
             signal.signal(sig, lambda *_: sys.exit(0))  # triggers atexit
 
         # Open DB read-write and check embedding model compatibility
-        self.db.connect(read_only=False)
+        self.db.connect()
         self._check_embedding_model()
 
         # Spawn background catch-up thread
@@ -239,9 +239,14 @@ class EmbeCodeServer:
     # ------------------------------------------------------------------
 
     def _setup_reader(self) -> None:
-        """Set up the reader role: open DB read-only, start lock file watcher."""
-        self.db.connect(read_only=True)
-        logger.info("Reader: connected to index in read-only mode")
+        """Set up the reader role: start lock file watcher (no DB connection).
+
+        Reader processes do not open DuckDB — they route all queries to the
+        owner via IPC.  The IPC client connection will be established in a
+        future iteration; for now the reader only watches the lock file so
+        it can promote when the owner exits.
+        """
+        logger.info("Reader: skipping DB connection (queries will be proxied via IPC)")
 
         # Start watching the lock file so we can promote when the owner exits
         self._lock_watcher_stop.clear()
@@ -336,7 +341,7 @@ class EmbeCodeServer:
         Steps:
         1. Attempt atomic lock file creation (another reader may win the race).
         2. Stop the lock file watcher.
-        3. Close read-only DB connection and reopen read-write.
+        3. Open DB read-write (readers never hold a DuckDB connection).
         4. Run catch-up indexing and start file watcher.
         """
         # Try to atomically claim the lock
@@ -364,8 +369,9 @@ class EmbeCodeServer:
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, lambda *_: sys.exit(0))
 
-        # Transition DB from read-only to read-write
-        self.db.reconnect(read_only=False)
+        # Open DB read-write (readers never open DuckDB, so this is the first
+        # connection for this process)
+        self.db.connect()
         self._check_embedding_model()
 
         # Run catch-up indexing then start the file watcher

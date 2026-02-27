@@ -89,7 +89,7 @@ def indexed_db(tmp_path: Path) -> Path:
     # -- index --------------------------------------------------------------
     db_path = tmp_path / "index.db"
     db = Database(db_path)
-    db.connect(read_only=False)
+    db.connect()
     try:
         config = load_config(project_dir)
         embedder = FixedVectorEmbedder()
@@ -173,7 +173,7 @@ def test_reader_can_search_while_owner_holds_connection(indexed_db: Path) -> Non
     try:
         # -- open reader (read-only) in *this* process ----------------------
         reader = Database(indexed_db)
-        reader.connect(read_only=True)
+        reader.connect()
         try:
             # Vector search
             results = reader.vector_search(_FIXED_UNIT_VECTOR, top_k=5)
@@ -259,9 +259,9 @@ def test_reader_sees_owner_written_data(tmp_path: Path) -> None:
     # Verify the DB file was created
     assert db_path.exists(), "index.db was not created by the indexer subprocess"
 
-    # -- Phase 2: reader opens read-only and searches -----------------------
+    # -- Phase 2: reader opens and searches (no separate owner process here) -
     reader = Database(db_path)
-    reader.connect(read_only=True)
+    reader.connect()
     try:
         # Verify data was indexed
         stats = reader.get_index_stats()
