@@ -113,6 +113,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 0}
@@ -164,6 +165,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -206,6 +208,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -221,7 +224,10 @@ class TestEmbeCodeServer:
             definitions="function hello",
             score=0.95,
         )
-        mock_searcher.search.return_value = [result]
+        mock_searcher.search.return_value = SearchResponse(
+            results=[result],
+            timings=SearchTimings(),
+        )
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server
@@ -269,6 +275,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 0}
@@ -326,6 +333,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -385,6 +393,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -434,12 +443,16 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
         mock_db_class.return_value = mock_db
 
-        mock_searcher.search.return_value = []
+        mock_searcher.search.return_value = SearchResponse(
+            results=[],
+            timings=SearchTimings(),
+        )
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server
@@ -482,6 +495,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -552,6 +566,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -570,7 +585,10 @@ class TestEmbeCodeServer:
             )
             for i in range(10)
         ]
-        mock_searcher.search.return_value = mock_results
+        mock_searcher.search.return_value = SearchResponse(
+            results=mock_results,
+            timings=SearchTimings(),
+        )
         mock_searcher_class.return_value = mock_searcher
 
         # Initialize server and search without explicit top_k
@@ -612,6 +630,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -693,6 +712,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -757,6 +777,7 @@ class TestEmbeCodeServer:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         mock_db.get_index_stats.return_value = {"total_chunks": 100}
@@ -820,6 +841,7 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Test with empty DB
@@ -863,6 +885,7 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
         mock_db_class.return_value = mock_db
 
@@ -906,6 +929,7 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
         mock_db_class.return_value = mock_db
 
@@ -947,6 +971,7 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Stored model matches configured model
@@ -986,6 +1011,7 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Stored model differs from configured model ("test-model")
@@ -1029,6 +1055,7 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # No stored model (first run)
@@ -1070,6 +1097,7 @@ class TestCatchUpStartup:
         cache_dir = temp_project / ".cache"
         cache_dir.mkdir()
         mock_cache_manager.get_cache_dir.return_value = cache_dir
+        mock_cache_manager.get_lock_path.return_value = cache_dir / "daemon.lock"
         mock_cache_manager_class.return_value = mock_cache_manager
 
         # Track call order
